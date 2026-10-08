@@ -7,23 +7,23 @@
 !/.gitmodules
 !/.github/
 !/README.md
-!/README-QUEST-VR.md
-!/README-PC-VR.md
 !/LICENSE
 !/THIRD-PARTY-NOTICES.md
-!/Play Astro Bot VR.bat
-!/quest-host/
+!/run.bat
+!/Play Rush of Blood (DualSense).bat
 !/shadps4-arm64-main/
 
-# The PC play folder: only the launcher and its settings, not the emulator built into it, nor
-# its user folder (saves, logs, shader cache).
+# The PC play folder: only the launcher, its settings and the clean starting files of a release
+# (pc-vr/template), not the emulator built into it, nor its user folder (saves, logs, shader
+# cache).
 !/pc-vr/
 /pc-vr/*
 !/pc-vr/launch.ps1
 !/pc-vr/settings.txt
+!/pc-vr/template/
 
 # Scripts yes, toolchains and downloads no (clang, CMake, Ninja, Windows SDK, sysroot, jadx,
-# apktool, PkgTool, the OpenXR loader for Android: see README.md, "Building").
+# PkgTool: see tools/make-release.ps1).
 !/tools/
 /tools/*/
 !/tools/probes/
