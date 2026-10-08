@@ -1,0 +1,104 @@
+﻿# Settings for "run.bat", one key=value a line. Lines starting with # are ignored;
+# what is commented out below shows the value that applies when the line is left out.
+
+# The window at the start (menu=0 to go without it) sets resolution, fps and fov below.
+
+# The width of each eye's picture: 1440 is the console's largest (what a PlayStation 4 Pro
+# draws, 1440x1536); 1800, 2160, 2520, 2880, 3240 or 3600 have the game draw that much larger
+# (2880 = 2880x3072, four times the pixels), with the memory that takes. The game draws a step
+# smaller by itself while the graphics card cannot keep up; dynamic=0 holds it to the size.
+# game: the console's sizes, chosen by the game itself (816 to 1440).
+#resolution=2880
+#dynamic=1
+
+# The most frames a second: 120, 90, 72, 60, 45, 40, 36 or 30. A frame lasts a whole number of
+# the headset's refreshes, so the refresh rate set in Virtual Desktop (Streaming > Frame rate)
+# decides what is possible: at 120 Hz 120, 60, 40 or 30; at 90 Hz 90, 45 or 30; at 72 Hz 72 or
+# 36. 60 is the console's own. Above 60 the PC has to keep up (this one manages about 100), and
+# the few things the game counts in frames (some animated signs) run faster.
+#fps=60
+
+# How much of the headset's field of view the game draws, in percent, 70 to 160: at 100 the
+# picture fills all that the headset shows; less puts the same pixels over fewer degrees, a
+# sharper picture with a dark border where the rest was; more draws a wider view (softer, and
+# the coloured corners outside the lens circle move out of sight: 155 is what a Quest 3
+# needs, and the default).
+#fov=155
+
+# What fov is a percent of: headset (the headset being worn, whatever it is: the emulator asks
+# it as the game starts) or psvr (a PlayStation VR's 100 by 103 degrees an eye, the view the
+# game was made for, which leaves a narrow dark margin far out to the sides on a Quest 3).
+#fov_of=psvr
+
+# 1: the window with the main settings comes up at every start.
+#menu=1
+
+# Sharpening of the picture on its way to the headset, 0 (none) to 1. Virtual Desktop has a
+# sharpening of its own (Streaming tab): what is here comes on top of it.
+#sharpen=0.3
+
+# The most samples a pixel gets (1, 2, 4, 8). Left out: as the console draws it (4). With 1 the
+# emulator smooths edges itself instead, unless antialias=0.
+#msaa=4
+#antialias=1
+
+# 0: your hands are not used to place the controller in the game; it then stays at a fixed
+# spot in front of you, turned by its own motion sensors. (The hands are what the headset
+# tracks: hand tracking has to be on in the headset, and Virtual Desktop has to pass it on to
+# the PC - its setting for forwarding tracking data. Where it does not, the places it gives
+# the headset's controllers stand in, which it makes up from the hands while they lie unused.)
+# The DualSense must be connected to this PC itself (USB cable or Bluetooth): paired with the
+# headset, it reaches the PC through Virtual Desktop without motion sensors and touchpad.
+#hands=1
+
+# How far beyond the next picture the head position given to the game is predicted, in
+# milliseconds (0 to 80). More if black edges show when you turn your head, less if the world
+# wobbles.
+#predict_ms=20
+
+# 0: the right stick no longer doubles as a finger on the touchpad.
+#stick_touchpad=1
+
+# 0: the headset's own controllers never stand in for a gamepad. (They only do while no gamepad
+# is connected to the PC.)
+#controllers=1
+
+# Which of the headset's controllers is the controller in the game while they stand in for a
+# gamepad: right or left.
+#controller_hand=right
+
+# 0: the game's surround sound is folded down to left and right instead of being rendered for
+# the headset's speakers.
+#surround=1
+
+# 0: the game is never made to wait. (It waits, black, while the headset is off the head or
+# shows something else, Virtual Desktop's view of the desktop for one, and goes on after.) For
+# when it waits although the headset is on and shows the game.
+#pause=1
+
+# 0: the game counts time in frames, as on the console (slow motion whenever a frame takes
+# longer than a sixtieth of a second).
+#real_time=1
+
+# The older way to say fps: how many of the headset's pictures every frame is given (1, 2, 3...).
+# Takes the place of fps when set.
+#pace=2
+
+# Seconds to wait for a headset before the game starts on the monitor without one. A headset
+# connected later is picked up anyway, wherever the game is by then. 0: do not wait.
+#wait=60
+
+# 0: do not look for a headset at all, play on the monitor.
+#headset=1
+
+# Where the game is, if it is not in the games folder next to this one: its eboot.bin, its
+# folder, or its .pkg package (which is then unpacked into the games folder). The launcher
+# writes this line itself when it has to ask where the game is.
+#game=C:\path\to\CUSA03683\eboot.bin
+
+# Extra environment variables for the emulator, as many lines as needed.
+#env=NAME=value
+resolution=2880
+fps=60
+fov=155
+menu=1

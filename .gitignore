@@ -1,0 +1,45 @@
+# Only what is listed here is part of the repository. Everything else at the top level stays
+# out: the game and anything made from it (extracted files, saves, logs, screenshots, render
+# target and audio dumps), build output, downloaded toolchains and other people's packages.
+/*
+!/.gitignore
+!/.gitattributes
+!/.gitmodules
+!/.github/
+!/README.md
+!/README-QUEST-VR.md
+!/README-PC-VR.md
+!/LICENSE
+!/THIRD-PARTY-NOTICES.md
+!/Play Astro Bot VR.bat
+!/quest-host/
+!/shadps4-arm64-main/
+
+# The PC play folder: only the launcher and its settings, not the emulator built into it, nor
+# its user folder (saves, logs, shader cache).
+!/pc-vr/
+/pc-vr/*
+!/pc-vr/launch.ps1
+!/pc-vr/settings.txt
+
+# Scripts yes, toolchains and downloads no (clang, CMake, Ninja, Windows SDK, sysroot, jadx,
+# apktool, PkgTool, the OpenXR loader for Android: see README.md, "Building").
+!/tools/
+/tools/*/
+!/tools/probes/
+!/tools/re/
+!/tools/shims/
+!/tools/tests/
+/tools/*.local
+
+# Never anywhere: game files and packages.
+*.pkg
+*.apk
+*.sfo
+*.sprx
+*.prx
+eboot.bin
+sce_sys/
+sce_module/
+savedata/
+shadps4.map
