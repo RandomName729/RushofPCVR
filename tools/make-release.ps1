@@ -79,9 +79,9 @@ $documented = Get-Content -LiteralPath (Join-Path $root "pc-vr\settings.txt") |
 $defaults = @(
     "",
     "# What this release starts with (the window at the start changes and saves them):",
-    "resolution=1440",
+    "eye_width=1152",
     "fps=60",
-    "fov=155",
+    "fov=120",
     "fov_of=psvr",
     "menu=1"
 )
@@ -109,15 +109,18 @@ through Virtual Desktop.
    the game's files whose full path would be longer than 260 characters.
 2. Virtual Desktop: install the Streamer on this PC and choose VDXR as the OpenXR runtime in
    its Options. In the headset, set Virtual Desktop's frame rate to 120 (Streaming settings).
+   (SteamVR can be used instead: pick it under "Headset connection" in the start-up window,
+   with the headset connected to SteamVR first. It has been tested through level 4.)
 3. Connect the DualSense to this PC (USB cable, or Bluetooth paired with the PC, not with the
-   headset). Without a gamepad the headset's Touch controllers play.
+   headset). The headset's own controllers do not play the game.
 4. Connect Virtual Desktop to this PC, then start "Play Rush of Blood (DualSense).bat". (If the
    Microsoft Visual C++ runtime is missing, it says so and offers Microsoft's download.)
 5. In the game's own start-up question, choose the DualShock controller, not the Move
-   controllers (they do not work yet).
+   controllers (they are not supported).
 
-This is an early version: the title screen, the intro and level 1 play through; later levels
-are untested, and the game runs slower than on the console. Settings are in
+This is an early version: the title screen, the intro and levels 1 to 4 play through (later
+levels are untested), with visual glitches in the levels, and the game runs slower than on
+the console. Settings are in
 pc-vr\settings.txt, the log in pc-vr\user\log\shad_log.txt, saves in pc-vr\user\home.
 
 RushVR is free software under the GNU GPL, version 2 or later (LICENSE.txt), built on shadPS4.

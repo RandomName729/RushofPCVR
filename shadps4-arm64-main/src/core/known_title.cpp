@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -134,6 +135,166 @@ const Larger& GetLarger() {
         return result;
     }();
     return larger;
+}
+
+// Until Dawn: Rush of Blood (CUSA03683, and CUSA02350 of Europe). The game draws both eyes into
+// one picture, side by side: 2304x1296 on the console (1152x1296 an eye, 1.2 times the
+// 1920x1080 of a television), 2688x1512 on its Pro model. The sizes are a list of rectangles
+// in its read-only data, of which it takes one by whether the console is a Pro; the memory it
+// sets aside for graphics ("GNM Video Pool", where the targets come from) is one of two sizes
+// by the same question, and the Pro's is 200 MB the larger. Neither is looked for at a place
+// known beforehand: both are found by what they say, once and only once, in whichever build
+// this is.
+constexpr u32 RushEyeWidth = 1152;
+constexpr u32 RushEyeHeight = 1296;
+// Two of them side by side are 11520 wide, within the 16384 the headset runtimes take; the pool
+// of the largest is 3.9 GB, which is as much as the 32 bits the game keeps its size in can hold.
+constexpr u32 RushLargestEyeWidth = 2880;
+constexpr u64 RushLargestPool = 0xf0000000;
+constexpr u32 RushPicturePixels = 2304u * 1296u;
+constexpr u32 RushProPicturePixels = 2688u * 1512u;
+constexpr u32 RushPool = 0x26700000;
+constexpr u32 RushProPool = 0x32f00000;
+/// What the Pro's pool has more than the console's, for every pixel its picture has more.
+constexpr u64 RushBytesPerPixel =
+    (RushProPool - RushPool + (RushProPicturePixels - RushPicturePixels) / 2) /
+    (RushProPicturePixels - RushPicturePixels);
+
+// Four of the list's rectangles, as the game has them in a row: from the lowest to the Pro's.
+constexpr std::array<s32, 22> RushSizeList{1920, 1080, 0,    0,    2112, 1188, 0,    0,
+                                           2304, 1296, 0,    0,    2496, 1404, 0,    0,
+                                           2688, 1512, 0,    0,    2880, 1620};
+constexpr std::size_t RushConsoleSizeAt = 8 * sizeof(s32); // 2304x1296
+constexpr std::size_t RushProSizeAt = 16 * sizeof(s32);    // 2688x1512
+// Where the pool is chosen: mov edx, <Pro>; mov ecx, <console>; test eax, eax; cmovg rcx, rdx.
+constexpr std::array<u8, 16> RushPoolCode{0xba, 0x00, 0x00, 0xf0, 0x32, 0xb9, 0x00, 0x00,
+                                          0x70, 0x26, 0x85, 0xc0, 0x48, 0x0f, 0x4f, 0xca};
+constexpr std::size_t RushProPoolAt = 1;
+constexpr std::size_t RushConsolePoolAt = 6;
+
+bool IsRush() {
+    const auto serial = Common::ElfInfo::Instance().GameSerial();
+    return serial == "CUSA03683" || serial == "CUSA02350";
+}
+
+/// The picture Rush of Blood is to draw, SHADPS4_ROB_EYE_WIDTH=<pixels> the width of an eye (1152
+/// on the console, up to 2880; the height follows in the same proportion).
+struct RushPlan {
+    bool larger{};
+    u32 eye_width{RushEyeWidth};
+    u32 eye_height{RushEyeHeight};
+    u32 width{2 * RushEyeWidth};
+    u32 height{RushEyeHeight};
+    u32 pool{RushPool};
+    /// What the console's memory has to grow by for it, in MB.
+    s32 extra_memory_mb{};
+};
+
+const RushPlan& GetRushPlan() {
+    static const RushPlan plan = [] {
+        RushPlan result;
+        const char* value = std::getenv("SHADPS4_ROB_EYE_WIDTH");
+        const s32 requested = value != nullptr ? std::atoi(value) : 0;
+        if (requested <= static_cast<s32>(RushEyeWidth)) {
+            return result;
+        }
+        // Steps of 16 an eye keep the picture the 16:9 it is, whole pixels all the way.
+        const u32 eye_width =
+            std::min<u32>(static_cast<u32>(requested + 8) / 16 * 16, RushLargestEyeWidth);
+        result.larger = true;
+        result.eye_width = eye_width;
+        result.eye_height = eye_width / 16 * 18; // 9/8 of the width
+        result.width = 2 * result.eye_width;
+        result.height = result.eye_height;
+        static constexpr u64 MB = 1ull << 20;
+        const u64 pixels = u64{result.width} * result.height;
+        // The Pro's pool is the console's and 200 MB for the pixels it has more; the same
+        // for every pixel more still, and some room besides.
+        const u64 more = static_cast<u64>(
+            static_cast<double>((pixels - RushPicturePixels) * RushBytesPerPixel) * 1.1);
+        u64 growth = (more + MB - 1) / MB * MB;
+        if (RushPool + growth > RushLargestPool) {
+            growth = (RushLargestPool - RushPool) / MB * MB;
+        }
+        result.pool = static_cast<u32>(RushPool + growth);
+        result.extra_memory_mb = static_cast<s32>((growth + 256 * MB) / (256 * MB) * 256);
+        return result;
+    }();
+    return plan;
+}
+
+/// Where `pattern` is in the image, and only once there: its offset, or no offset at all.
+std::optional<std::size_t> FindOnce(const u8* image, u64 size, const void* pattern,
+                                    std::size_t length) {
+    const u8* first = static_cast<const u8*>(pattern);
+    std::optional<std::size_t> found;
+    const u8* end = image + size - length;
+    for (const u8* at = image; at <= end;) {
+        at = static_cast<const u8*>(std::memchr(at, first[0], static_cast<std::size_t>(end - at) + 1));
+        if (at == nullptr) {
+            break;
+        }
+        if (std::memcmp(at, pattern, length) == 0) {
+            if (found) {
+                return std::nullopt;
+            }
+            found = static_cast<std::size_t>(at - image);
+        }
+        ++at;
+    }
+    return found;
+}
+
+void PrepareRush() {
+    const RushPlan& plan = GetRushPlan();
+    if (!plan.larger) {
+        return;
+    }
+    if (EmulatorSettings.GetExtraDmemInMBytes() < plan.extra_memory_mb) {
+        EmulatorSettings.SetExtraDmemInMBytes(plan.extra_memory_mb);
+    }
+    LOG_INFO(Core, "Rush of Blood is to draw {}x{} ({}x{} an eye): its memory grows by {} MB",
+             plan.width, plan.height, plan.eye_width, plan.eye_height,
+             EmulatorSettings.GetExtraDmemInMBytes());
+}
+
+void PatchRush(VAddr base, u64 size) {
+    const RushPlan& plan = GetRushPlan();
+    if (!plan.larger) {
+        LOG_INFO(Core, "Rush of Blood draws at the console's size, 2304x1296 (1152x1296 an eye)");
+        return;
+    }
+    if (size < sizeof(s32) * RushSizeList.size() + RushPoolCode.size() || size > (1ull << 30)) {
+        return;
+    }
+    const u8* image = reinterpret_cast<const u8*>(base);
+    const auto sizes = FindOnce(image, size, RushSizeList.data(), sizeof(s32) * RushSizeList.size());
+    const auto pool = FindOnce(image, size, RushPoolCode.data(), RushPoolCode.size());
+    if (!sizes || !pool) {
+        LOG_WARNING(Core,
+                    "Rush of Blood: {} not found in this build, so it draws at the console's "
+                    "size",
+                    !sizes ? "the list of sizes" : "the choice of the memory pool");
+        return;
+    }
+    // Written only where the console's numbers still are, all of them or none.
+    const s32 picture[2]{static_cast<s32>(plan.width), static_cast<s32>(plan.height)};
+    std::memcpy(reinterpret_cast<void*>(base + *sizes + RushConsoleSizeAt), picture,
+                sizeof(picture));
+    // The Pro's own entry as well, for a console that says it is one.
+    std::memcpy(reinterpret_cast<void*>(base + *sizes + RushProSizeAt), picture, sizeof(picture));
+    const u32 console_pool = plan.pool;
+    const u32 pro_pool = std::max(plan.pool, RushProPool);
+    std::memcpy(reinterpret_cast<void*>(base + *pool + RushConsolePoolAt), &console_pool,
+                sizeof(console_pool));
+    std::memcpy(reinterpret_cast<void*>(base + *pool + RushProPoolAt), &pro_pool,
+                sizeof(pro_pool));
+    LOG_INFO(Core,
+             "Rush of Blood draws {}x{} ({}x{} an eye) instead of 2304x1296 (1152x1296 an eye): "
+             "its list of sizes is at {:#x}, its graphics pool is {} MB instead of {} MB "
+             "(choice at {:#x})",
+             plan.width, plan.height, plan.eye_width, plan.eye_height, *sizes, plan.pool >> 20,
+             RushPool >> 20, *pool);
 }
 
 /// "1440x1536" and the like, for a level of the list.
@@ -743,6 +904,10 @@ u32 FramePace() {
 }
 
 void Prepare() {
+    if (IsRush()) {
+        PrepareRush();
+        return;
+    }
     if (Common::ElfInfo::Instance().GameSerial() != "CUSA12392") {
         return;
     }
@@ -758,6 +923,10 @@ void Prepare() {
 }
 
 void OnGameLoaded(VAddr base, u64 size) {
+    if (IsRush()) {
+        PatchRush(base, size);
+        return;
+    }
     if (Common::ElfInfo::Instance().GameSerial() != "CUSA12392" || size < ImageEnd ||
         std::memcmp(reinterpret_cast<const void*>(base + SetRecentre), SetRecentreCode,
                     sizeof(SetRecentreCode)) != 0) {

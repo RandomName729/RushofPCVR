@@ -928,14 +928,111 @@ HmdFrames Presenter::PrepareHmdFrame(std::span<const AmdGpu::Image, 2> eye_textu
     // With a VR host attached the frame goes into one of its buffers instead of the window. A
     // headset of the machine's own gets a frame of its own next to the window's: the eyes'
     // pictures at their full size, where the window only has a look at them.
+    // A title that hands over one picture for both eyes (this one's has a circle for each in
+    // it) has the window show that picture once, not once for each eye.
+    const bool one_picture = image_ids[0].index == image_ids[1].index;
     Frame* frame = vr_exporter->Acquire(swapchain.GetSurfaceFormat().format);
     const bool exported = frame != nullptr;
     Frame* const local = exported ? nullptr : vr_exporter->AcquireLocal(eye_width * 2, eye_height);
     if (!exported) {
-        expected_ratio = static_cast<float>(eye_width * 2) / static_cast<float>(eye_height);
+        expected_ratio = static_cast<float>(one_picture ? eye_width : eye_width * 2) /
+                         static_cast<float>(eye_height);
         frame = GetRenderFrame();
         if (!frame && !local) {
             return {};
+        }
+    }
+
+    // Creating <UserDir>/dump_eye saves the picture the title hands to the headset, as it is
+    // drawn (before any scaling, sharpening or masking), to <UserDir>/eye_dump: the whole
+    // picture, and a crop of it at one pixel for each pixel around the left eye's circle.
+    {
+        static u32 frames_until_eye_check = 0;
+        std::error_code ec;
+        const auto eye_flag =
+            Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "dump_eye";
+        if (frames_until_eye_check-- == 0) {
+            frames_until_eye_check = 30;
+            if (std::filesystem::exists(eye_flag, ec)) {
+                std::filesystem::remove(eye_flag, ec);
+                auto& eye_image = texture_cache.GetImage(image_ids[0]);
+                const auto& eye_info = eye_image.info;
+                const u32 w = eye_info.size.width;
+                const u32 h = eye_info.size.height;
+                const bool rgba = eye_info.pixel_format == vk::Format::eR8G8B8A8Srgb ||
+                                  eye_info.pixel_format == vk::Format::eR8G8B8A8Unorm;
+                const bool bgra = eye_info.pixel_format == vk::Format::eB8G8R8A8Srgb ||
+                                  eye_info.pixel_format == vk::Format::eB8G8R8A8Unorm;
+                if (!(rgba || bgra) || eye_info.num_samples != 1) {
+                    LOG_WARNING(Render_Vulkan, "eye picture dump: format {} is not handled",
+                                vk::to_string(eye_info.pixel_format));
+                } else {
+                    const u64 bytes = u64{w} * h * 4;
+                    VideoCore::Buffer buffer{instance,
+                                             draw_scheduler,
+                                             VideoCore::MemoryUsage::Download,
+                                             0,
+                                             vk::BufferUsageFlagBits::eTransferDst,
+                                             bytes};
+                    draw_scheduler.EndRendering();
+                    const auto eye_cmdbuf = draw_scheduler.CommandBuffer();
+                    eye_image.Transit(vk::ImageLayout::eTransferSrcOptimal,
+                                      vk::AccessFlagBits2::eTransferRead, {}, eye_cmdbuf);
+                    const vk::BufferImageCopy region = {
+                        .bufferOffset = 0,
+                        .bufferRowLength = 0,
+                        .bufferImageHeight = 0,
+                        .imageSubresource =
+                            {
+                                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                                .mipLevel = 0,
+                                .baseArrayLayer = 0,
+                                .layerCount = 1,
+                            },
+                        .imageOffset = {0, 0, 0},
+                        .imageExtent = {w, h, 1},
+                    };
+                    eye_cmdbuf.copyImageToBuffer(eye_image.GetImage(),
+                                                 vk::ImageLayout::eTransferSrcOptimal,
+                                                 buffer.Handle(), region);
+                    draw_scheduler.Finish();
+                    std::vector<u8> pixels(bytes);
+                    std::memcpy(pixels.data(), buffer.mapped_data.data(), bytes);
+                    for (u64 i = 0; i < u64{w} * h; ++i) {
+                        u8* p = pixels.data() + i * 4;
+                        if (bgra) {
+                            std::swap(p[0], p[2]);
+                        }
+                        p[3] = 0xff;
+                    }
+                    const auto dir =
+                        Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "eye_dump";
+                    std::filesystem::create_directories(dir, ec);
+                    const auto whole_path = dir / fmt::format("eye_whole_{}x{}.png", w, h);
+                    const bool whole_ok = WritePng(whole_path, pixels, w, h);
+                    // One pixel for each pixel, around the left circle's centre.
+                    const u32 crop_w = std::min(w, 1920u);
+                    const u32 crop_h = std::min(h, 1080u);
+                    const u32 centre_x = static_cast<u32>(w * 0.2335f);
+                    const u32 centre_y = static_cast<u32>(h * 0.475f);
+                    const u32 x0 = std::min(centre_x > crop_w / 2 ? centre_x - crop_w / 2 : 0,
+                                            w - crop_w);
+                    const u32 y0 = std::min(centre_y > crop_h / 2 ? centre_y - crop_h / 2 : 0,
+                                            h - crop_h);
+                    std::vector<u8> crop(u64{crop_w} * crop_h * 4);
+                    for (u32 y = 0; y < crop_h; ++y) {
+                        std::memcpy(crop.data() + u64{y} * crop_w * 4,
+                                    pixels.data() + (u64{y0 + y} * w + x0) * 4, crop_w * 4);
+                    }
+                    const auto crop_path =
+                        dir / fmt::format("eye_crop_{}x{}_at_{}_{}.png", crop_w, crop_h, x0, y0);
+                    const bool crop_ok = WritePng(crop_path, crop, crop_w, crop_h);
+                    LOG_WARNING(Render_Vulkan,
+                                "eye picture dumped ({}x{}, {}): whole {}, crop {} -> {}", w, h,
+                                vk::to_string(eye_info.pixel_format), whole_ok ? "ok" : "failed",
+                                crop_ok ? "ok" : "failed", dir.string());
+                }
+            }
         }
     }
 
@@ -1002,12 +1099,41 @@ HmdFrames Presenter::PrepareHmdFrame(std::span<const AmdGpu::Image, 2> eye_textu
         return value != nullptr ? std::clamp(static_cast<float>(std::atof(value)), 0.0f, 1.0f)
                                 : 0.0f;
     }();
+    // SHADPS4_VR_MASK=<scale>: for a title that draws both eyes into one picture, each in a
+    // lens-shaped circle on coloured corners, the corners go black. That lets the told field of
+    // view be as small as the circle (sharper) without the corners showing at the edges.
+    static const float mask = [] {
+        const char* value = std::getenv("SHADPS4_VR_MASK");
+        return value != nullptr ? std::clamp(static_cast<float>(std::atof(value)), 0.0f, 2.0f)
+                                : 0.0f;
+    }();
     auto hmd_settings = pp_settings;
     hmd_settings.sharpen = sharpen;
+    hmd_settings.mask = one_picture ? mask : 0.0f;
+    // SHADPS4_VR_FXAA=<0..1>: smooths edges of the picture on its way to the headset (a title
+    // that draws without multisampling has nothing else that would).
+    static const float fxaa = [] {
+        const char* value = std::getenv("SHADPS4_VR_FXAA");
+        return value != nullptr ? std::clamp(static_cast<float>(std::atof(value)), 0.0f, 1.0f)
+                                : 0.0f;
+    }();
+    hmd_settings.fxaa = fxaa;
     if (frame != nullptr) {
         // The marker is for hosts that only see the picture; a VR host is told the frame's id.
-        pp_pass.Render(cmdbuf, regions_for(*frame), *frame, hmd_settings,
-                       exported ? std::nullopt : std::optional<u32>{frame_id});
+        const std::optional<u32> marker =
+            exported ? std::nullopt : std::optional<u32>{frame_id};
+        if (!exported && one_picture) {
+            const HostPasses::PostProcessingPass::Region whole{
+                .input = eye_views[0],
+                .area{
+                    .offset{.x = 0, .y = 0},
+                    .extent{.width = frame->width, .height = frame->height},
+                },
+            };
+            pp_pass.Render(cmdbuf, std::span{&whole, 1}, *frame, hmd_settings, marker);
+        } else {
+            pp_pass.Render(cmdbuf, regions_for(*frame), *frame, hmd_settings, marker);
+        }
         if (exported) {
             vr_exporter->Finalize(frame, cmdbuf);
         }

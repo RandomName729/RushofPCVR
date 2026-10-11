@@ -1845,6 +1845,11 @@ void Rasterizer::UpdateViewportScissorState() const {
         scissors.push_back(empty_scissor);
     }
 
+    if (FrameStats::Enabled() && !viewports.empty()) {
+        FrameStats::Viewport(static_cast<u32>(std::max(viewports[0].width, 0.0f)),
+                             static_cast<u32>(std::max(viewports[0].height, 0.0f)));
+    }
+
     // A measuring aid, not a setting: SHADPS4_DBG_VIEWPORT_SCALE=<0..1> shrinks everything that is
     // drawn towards the corner of its target. The picture is wrong, but how much faster the GPU
     // gets tells how much of its time goes into filling pixels rather than into the draws

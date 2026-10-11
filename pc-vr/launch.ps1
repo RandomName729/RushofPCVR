@@ -48,10 +48,11 @@ function Save-Setting([string]$key, [string]$value) {
 }
 Read-Settings
 
-# The sizes an eye can be drawn at: the console's largest (1440x1536, what a PlayStation 4 Pro
-# draws) and larger, all the same shape.
-$widths = @(1440, 1800, 2160, 2520, 2880, 3240, 3600)
-function EyeHeight([int]$width) { return [int]([math]::Round(1536.0 * $width / 1440 / 8) * 8) }
+# The sizes an eye can be drawn at: the console's own (1152x1296: the game draws both eyes into
+# one picture of 2304x1296) and larger, all the same shape (the height is 9/8 of the width).
+$widths = @(1152, 1344, 1536, 1728, 1920, 2048, 2304, 2560, 2880)
+$defaultWidth = 1152
+function EyeHeight([int]$width) { return [int]($width * 9 / 8) }
 $caps = @(120, 90, 72, 60, 45, 40, 36, 30)
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -519,7 +520,7 @@ function Show-Menu {
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "RushVR"
-    $form.ClientSize = New-Object System.Drawing.Size(560, 452)
+    $form.ClientSize = New-Object System.Drawing.Size(560, 488)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
@@ -535,6 +536,38 @@ function Show-Menu {
     $form.Controls.Add($title)
     $y += 40
 
+    # Headset connection.
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = "Headset connection (OpenXR runtime)"
+    $label.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+    $label.SetBounds(16, $y, 520, 20)
+    $form.Controls.Add($label)
+    $y += 24
+    $runtimeNames = @("As the PC has it set up", "Virtual Desktop", "SteamVR")
+    $runtimeKeys = @("pc", "virtualdesktop", "steamvr")
+    $runtimeBox = New-Object System.Windows.Forms.ComboBox
+    $runtimeBox.DropDownStyle = "DropDownList"
+    foreach ($name in $runtimeNames) { [void]$runtimeBox.Items.Add($name) }
+    $runtimeBox.SetBounds(16, $y, 240, 26)
+    $index = [array]::IndexOf($runtimeKeys, (Setting "runtime" "pc"))
+    if ($index -lt 0) { $index = 0 }
+    $runtimeBox.SelectedIndex = $index
+    $form.Controls.Add($runtimeBox)
+    $y += 32
+    $runtimeText = New-Object System.Windows.Forms.Label
+    $runtimeText.SetBounds(16, $y, 530, 44)
+    $form.Controls.Add($runtimeText)
+    $updateRuntime = {
+        $runtimeText.Text = switch ($runtimeBox.SelectedIndex) {
+            1 { "Through Virtual Desktop's streamer, which is started if it is not running. In the headset, connect Virtual Desktop to this PC." }
+            2 { "Through SteamVR, which is started if it is not running: the headset has to be connected to it first. Not tested with this game yet." }
+            default { "Whichever runtime the PC has set as its OpenXR runtime (Virtual Desktop's streamer sets itself when it starts)." }
+        }
+    }
+    $runtimeBox.Add_SelectedIndexChanged($updateRuntime)
+    & $updateRuntime
+    $y += 48
+
     # Resolution.
     $label = New-Object System.Windows.Forms.Label
     $label.Text = "Resolution of each eye"
@@ -548,9 +581,10 @@ function Show-Menu {
     $resolution.TickFrequency = 1
     $resolution.LargeChange = 1
     $resolution.SetBounds(12, $y, 530, 40)
-    $current = [int](Setting "resolution" "2880")
+    $current = 0
+    [void][int]::TryParse((Setting "eye_width" "$defaultWidth"), [ref]$current)
     $index = [array]::IndexOf($widths, $current)
-    if ($index -lt 0) { $index = 4 }
+    if ($index -lt 0) { $index = [array]::IndexOf($widths, $defaultWidth) }
     $resolution.Value = $index
     $form.Controls.Add($resolution)
     $y += 42
@@ -560,39 +594,13 @@ function Show-Menu {
     $update = {
         $w = $widths[$resolution.Value]
         $h = EyeHeight $w
-        $times = ($w * $h) / (1440.0 * 1536.0)
-        $what = if ($w -eq 1440) { "the console's own, as a PlayStation 4 Pro draws it" } else { "{0:N2} times the pixels of the console" -f $times }
-        $resolutionText.Text = "$w x $h pixels an eye: $what. The game draws smaller by itself when the graphics card cannot keep up."
+        $times = ($w * $h) / (1152.0 * 1296.0)
+        $what = if ($w -eq 1152) { "the console's own: the sharpness of the PlayStation 4" } elseif ($w -gt 2048) { "{0:N1} times the pixels of the console's: very demanding, it needs a lot of graphics memory and about {1:N1} GB more memory" -f $times, (($times - 1) * 0.64) } else { "{0:N2} times the pixels of the console's: more work for the graphics card, and more memory" -f $times }
+        $resolutionText.Text = "$w x $h pixels for each eye: $what. Start lower if the game stutters."
     }
     $resolution.Add_ValueChanged($update)
     & $update
     $y += 46
-
-    # Frame rate.
-    $label = New-Object System.Windows.Forms.Label
-    $label.Text = "Frames a second, at most"
-    $label.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-    $label.SetBounds(16, $y, 520, 20)
-    $form.Controls.Add($label)
-    $y += 24
-    $fps = New-Object System.Windows.Forms.ComboBox
-    $fps.DropDownStyle = "DropDownList"
-    foreach ($cap in $caps) {
-        $text = "$cap"
-        if ($cap -eq 60) { $text = "60 (the console's own)" }
-        [void]$fps.Items.Add($text)
-    }
-    $fps.SetBounds(16, $y, 200, 26)
-    $index = [array]::IndexOf($caps, [int](Setting "fps" "60"))
-    if ($index -lt 0) { $index = 3 }
-    $fps.SelectedIndex = $index
-    $form.Controls.Add($fps)
-    $y += 32
-    $fpsText = New-Object System.Windows.Forms.Label
-    $fpsText.Text = "A frame lasts a whole number of the headset's refreshes, so the headset's refresh rate decides what is possible: at 120 Hz 120, 60, 40 or 30 frames a second, at 90 Hz 90, 45 or 30, at 72 Hz 72 or 36. Virtual Desktop sets the refresh rate (Settings > Streaming > Frame rate): choose 120 for 60 frames a second."
-    $fpsText.SetBounds(16, $y, 530, 84)
-    $form.Controls.Add($fpsText)
-    $y += 88
 
     # Field of view.
     $label = New-Object System.Windows.Forms.Label
@@ -607,7 +615,7 @@ function Show-Menu {
     $fov.TickFrequency = 1
     $fov.LargeChange = 1
     $fov.SetBounds(12, $y, 300, 40)
-    $fov.Value = [math]::Max(14, [math]::Min(32, [int]([int](Setting "fov" "155") / 5)))
+    $fov.Value = [math]::Max(14, [math]::Min(32, [int]([int](Setting "fov" "120") / 5)))
     $form.Controls.Add($fov)
     $fovText = New-Object System.Windows.Forms.Label
     $fovText.SetBounds(316, $y + 4, 230, 40)
@@ -617,6 +625,8 @@ function Show-Menu {
         $percent = $fov.Value * 5
         if ($percent -eq 100) {
             $fovText.Text = $(if ($ofPsvr) { "100%: PlayStation VR's own" } else { "100%: all that the headset shows" })
+        } elseif ($percent -eq 120 -and $ofPsvr) {
+            $fovText.Text = "120%: the smoothest picture, no borders (the corners are black)"
         } elseif ($percent -eq 155 -and $ofPsvr) {
             $fovText.Text = "155%: the Quest 3's own, no lens corners in view"
         } elseif ($percent -gt 100) {
@@ -628,6 +638,58 @@ function Show-Menu {
     $fov.Add_ValueChanged($updateFov)
     & $updateFov
     $y += 46
+
+    # Edges and corners.
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = "Picture quality"
+    $label.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+    $label.SetBounds(16, $y, 520, 20)
+    $form.Controls.Add($label)
+    $y += 26
+
+    $fxaaValues = @("0", "0.35", "0.65", "1")
+    $fxaaNames = @("Off", "Light", "Normal", "Strong")
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = "Smooth edges (FXAA)"
+    $label.SetBounds(16, $y + 3, 170, 22)
+    $form.Controls.Add($label)
+    $fxaaBox = New-Object System.Windows.Forms.ComboBox
+    $fxaaBox.DropDownStyle = "DropDownList"
+    foreach ($name in $fxaaNames) { [void]$fxaaBox.Items.Add($name) }
+    $fxaaBox.SetBounds(190, $y, 300, 26)
+    $fxaaNow = 0.65
+    [void][double]::TryParse((Setting "fxaa" "0.65"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$fxaaNow)
+    $best = 2
+    $bestDistance = 1000.0
+    for ($i = 0; $i -lt $fxaaValues.Count; $i++) {
+        $distance = [math]::Abs([double]::Parse($fxaaValues[$i], [System.Globalization.CultureInfo]::InvariantCulture) - $fxaaNow)
+        if ($distance -lt $bestDistance) { $best = $i; $bestDistance = $distance }
+    }
+    $fxaaBox.SelectedIndex = $best
+    $form.Controls.Add($fxaaBox)
+    $y += 32
+
+    $maskValues = @("0", "0.94", "0.97", "1", "1.05")
+    $maskNames = @("Off: the coloured corners show", "Tighter (0.94): if colour is still left at the edge", "Tight (0.97): if some colour is left at the edge", "On (1.0): black corners outside the lens circles", "Loose (1.05): if the picture's edge is cut off")
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = "Black corners (mask)"
+    $label.SetBounds(16, $y + 3, 170, 22)
+    $form.Controls.Add($label)
+    $maskBox = New-Object System.Windows.Forms.ComboBox
+    $maskBox.DropDownStyle = "DropDownList"
+    foreach ($name in $maskNames) { [void]$maskBox.Items.Add($name) }
+    $maskBox.SetBounds(190, $y, 300, 26)
+    $maskNow = 1.0
+    [void][double]::TryParse((Setting "mask" "1"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$maskNow)
+    $best = 3
+    $bestDistance = 1000.0
+    for ($i = 0; $i -lt $maskValues.Count; $i++) {
+        $distance = [math]::Abs([double]::Parse($maskValues[$i], [System.Globalization.CultureInfo]::InvariantCulture) - $maskNow)
+        if ($distance -lt $bestDistance) { $best = $i; $bestDistance = $distance }
+    }
+    $maskBox.SelectedIndex = $best
+    $form.Controls.Add($maskBox)
+    $y += 34
 
     $again = New-Object System.Windows.Forms.CheckBox
     $again.Text = "Show this window at every start"
@@ -650,8 +712,10 @@ function Show-Menu {
 
     $result = Show-Form $form
     if ($result -ne [System.Windows.Forms.DialogResult]::OK) { return $false }
-    Save-Setting "resolution" ($widths[$resolution.Value])
-    Save-Setting "fps" ($caps[$fps.SelectedIndex])
+    Save-Setting "runtime" ($runtimeKeys[$runtimeBox.SelectedIndex])
+    Save-Setting "eye_width" ($widths[$resolution.Value])
+    Save-Setting "fxaa" ($fxaaValues[$fxaaBox.SelectedIndex])
+    Save-Setting "mask" ($maskValues[$maskBox.SelectedIndex])
     Save-Setting "fov" ($fov.Value * 5)
     Save-Setting "menu" ($(if ($again.Checked) { "1" } else { "0" }))
     Read-Settings
@@ -687,27 +751,24 @@ if (-not $NoMenu -and (Setting "menu" "1") -ne "0") {
 }
 
 # What the settings mean to the emulator.
-# resolution: the width of an eye (1440 the console's; larger ones are the game's sizes grown,
-# with the memory that takes). game: the console's sizes, chosen by the game itself.
-$resolution = Setting "resolution" "2880"
-$dynamic = (Setting "dynamic" "1") -ne "0"
-if ($resolution -eq "game") {
-    $env:SHADPS4_TITLE_RESOLUTION = "title"
-} else {
-    $width = 0
-    if (-not [int]::TryParse($resolution, [ref]$width)) { $width = 2880 }
-    # (The console's other sizes, 816 to 1200, as they were offered before.)
-    $smaller = @{ 816 = "3"; 960 = "4"; 1200 = "5" }
-    if ($smaller.ContainsKey($width)) {
-        $env:SHADPS4_TITLE_RESOLUTION = $smaller[$width]
-    } else {
-        $width = [math]::Max(1440, [math]::Min(4320, [int]([math]::Round($width / 8) * 8)))
-        if ($width -gt 1440) { $env:SHADPS4_TITLE_EYE_WIDTH = "$width" }
-        # Left to choose, the emulator draws smaller where the graphics card falls behind.
-        if (-not $dynamic) { $env:SHADPS4_TITLE_RESOLUTION = "6" }
-    }
-}
+# eye_width: the width of an eye (1152 the console's; larger ones are the game's picture grown,
+# with the memory that takes, up to 2880).
+$width = 0
+if (-not [int]::TryParse((Setting "eye_width" "$defaultWidth"), [ref]$width)) { $width = $defaultWidth }
+$width = [math]::Max(1152, [math]::Min(2880, [int]([math]::Round($width / 16) * 16)))
+if ($width -gt 1152) { $env:SHADPS4_ROB_EYE_WIDTH = "$width" }
 $env:SHADPS4_VR_SHARPEN = Setting "sharpen" "0.3"
+# mask: the coloured corners outside the two lens circles go black (0 off, 1 as drawn).
+$mask = 0.0
+if (-not [double]::TryParse((Setting "mask" "1"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$mask)) { $mask = 1.0 }
+$mask = [math]::Max(0.0, [math]::Min(2.0, $mask))
+if ($mask -gt 0) { $env:SHADPS4_VR_MASK = $mask.ToString([System.Globalization.CultureInfo]::InvariantCulture) }
+# fxaa: smoothing of the picture's edges (0 off, up to 1). The game draws without multisampling, so
+# msaa and antialias have nothing to work on here.
+$fxaa = 0.65
+if (-not [double]::TryParse((Setting "fxaa" "0.65"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$fxaa)) { $fxaa = 0.65 }
+$fxaa = [math]::Max(0.0, [math]::Min(1.0, $fxaa))
+if ($fxaa -gt 0) { $env:SHADPS4_VR_FXAA = $fxaa.ToString([System.Globalization.CultureInfo]::InvariantCulture) }
 if ((Setting "msaa") -ne "") { $env:SHADPS4_MAX_MSAA = Setting "msaa" }
 if ((Setting "antialias" "1") -eq "0") { $env:SHADPS4_RESOLVE_AA = "0" }
 if ((Setting "hands" "1") -eq "0") { $env:SHADPS4_XR_HANDS = "0" }
@@ -715,7 +776,7 @@ if ((Setting "predict_ms") -ne "") { $env:SHADPS4_XR_PREDICT_MS = Setting "predi
 if ((Setting "stick_touchpad" "1") -eq "0") { $env:SHADPS4_STICK_TOUCHPAD = "0" }
 if ((Setting "surround" "1") -eq "0") { $env:SHADPS4_VIRTUAL_SURROUND = "0" }
 if ((Setting "real_time" "1") -eq "0") { $env:SHADPS4_TITLE_TIMESTEP = "0" }
-$fovSetting = Setting "fov" "155"
+$fovSetting = Setting "fov" "120"
 if ($fovSetting -ne "100") { $env:SHADPS4_VR_FOV = $fovSetting }
 # fov_of: what fov is a percent of. headset: what the headset being worn shows, all of it at 100
 # (the emulator asks the headset as it starts). psvr: a PlayStation VR's, as the game was made.
@@ -727,8 +788,6 @@ $pace = Setting "pace" ""
 if ($pace -eq "1") { $env:SHADPS4_VR_FASTEST_PACE = "1"; $env:SHADPS4_VR_FPS_CAP = "" } elseif ($pace -ne "" -and $pace -ne "2") { $env:SHADPS4_VR_PACE = $pace }
 if ((Setting "headset" "1") -eq "0") { $env:SHADPS4_OPENXR = "0" }
 if ((Setting "pause" "1") -eq "0") { $env:SHADPS4_XR_PAUSE = "0" }
-if ((Setting "controllers" "1") -eq "0") { $env:SHADPS4_XR_CONTROLLERS = "0" }
-if ((Setting "controller_hand" "right") -eq "left") { $env:SHADPS4_XR_PAD_HAND = "left" }
 $env:SHADPS4_XR_WAIT = Setting "wait" "60"
 foreach ($pair in $extraEnv) {
     $at = $pair.IndexOf("=")
@@ -737,8 +796,64 @@ foreach ($pair in $extraEnv) {
 
 # --- what is there ----------------------------------------------------------------------------
 Say "Until Dawn: Rush of Blood - PC VR" "Cyan"
-if ($env:SHADPS4_TITLE_EYE_WIDTH) {
-    Say ("Each eye up to " + $env:SHADPS4_TITLE_EYE_WIDTH + " x " + (EyeHeight ([int]$env:SHADPS4_TITLE_EYE_WIDTH)) + ", at most " + $env:SHADPS4_VR_FPS_CAP + " frames a second.")
+if ($env:SHADPS4_ROB_EYE_WIDTH) {
+    Say ("Each eye " + $env:SHADPS4_ROB_EYE_WIDTH + " x " + (EyeHeight ([int]$env:SHADPS4_ROB_EYE_WIDTH)) + " pixels (the console's: 1152 x 1296).")
+}
+# runtime: which OpenXR runtime the game uses. pc (or left out): the one the PC has set up
+# (Virtual Desktop's, when its streamer was the last to set itself). virtualdesktop: Virtual
+# Desktop's. steamvr: SteamVR's. Or the full path of a runtime's .json file.
+function Find-OpenXrRuntime([string]$pattern) {
+    foreach ($hive in @('HKLM:\SOFTWARE\Khronos\OpenXR\1\AvailableRuntimes', 'HKCU:\SOFTWARE\Khronos\OpenXR\1\AvailableRuntimes')) {
+        try {
+            foreach ($name in (Get-Item $hive -ErrorAction Stop).GetValueNames()) {
+                if ($name -match $pattern -and (Test-Path $name)) { return $name }
+            }
+        } catch {}
+    }
+    return ""
+}
+$runtimeSetting = Setting "runtime"
+if ($runtimeSetting -notin @("", "pc", "default") -and -not $env:XR_RUNTIME_JSON) {
+    $json = ""
+    if ($runtimeSetting -eq "steamvr") {
+        $json = Find-OpenXrRuntime "steamxr"
+        if ($json -eq "") {
+            $roots = @()
+            try { $roots += (Get-ItemProperty 'HKCU:\Software\Valve\Steam' -ErrorAction Stop).SteamPath } catch {}
+            try { $roots += (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam' -ErrorAction Stop).InstallPath } catch {}
+            $roots += "C:\Program Files (x86)\Steam"
+            foreach ($root in @($roots)) {
+                $vdf = Join-Path $root "steamapps\libraryfolders.vdf"
+                if (Test-Path $vdf) {
+                    foreach ($line in (Get-Content $vdf)) {
+                        if ($line -match '"path"\s+"([^"]+)"') { $roots += ($Matches[1] -replace '\\\\', '\') }
+                    }
+                }
+            }
+            foreach ($root in $roots) {
+                $candidate = Join-Path $root "steamapps\common\SteamVR\steamxr_win64.json"
+                if (Test-Path $candidate) { $json = $candidate; break }
+            }
+        }
+        if ($json -eq "") { Say "SteamVR was not found (is it installed through Steam?): using the runtime the PC has set up." "Yellow" }
+    } elseif ($runtimeSetting -eq "virtualdesktop") {
+        $json = Find-OpenXrRuntime "virtualdesktop"
+        if ($json -eq "" -and (Test-Path "C:\Program Files\Virtual Desktop Streamer\VirtualDesktop.OpenXR.Runtime.json")) {
+            $json = "C:\Program Files\Virtual Desktop Streamer\VirtualDesktop.OpenXR.Runtime.json"
+        }
+        if ($json -eq "") { Say "Virtual Desktop's runtime was not found (is the Streamer installed?): using the runtime the PC has set up." "Yellow" }
+    } elseif (Test-Path $runtimeSetting) {
+        $json = $runtimeSetting
+    } else {
+        Say "runtime=$runtimeSetting is not a file: using the runtime the PC has set up." "Yellow"
+    }
+    if ($json -ne "") {
+        $env:XR_RUNTIME_JSON = $json
+        if ($runtimeSetting -eq "steamvr" -and -not (Get-Process "vrserver" -ErrorAction SilentlyContinue)) {
+            Say "Starting SteamVR..."
+            try { Start-Process "steam://rungameid/250820" } catch {}
+        }
+    }
 }
 $runtime = ""
 if ($env:XR_RUNTIME_JSON) {
@@ -765,7 +880,11 @@ if ($runtime -eq "") {
     }
 }
 Say ""
-Say "In the headset: connect Virtual Desktop to this PC. The game moves into the headset by itself."
+if ($runtime -match "steam") {
+    Say "In the headset: connect it to SteamVR (the SteamVR window shows when it is). The game moves into the headset by itself."
+} else {
+    Say "In the headset: connect Virtual Desktop to this PC. The game moves into the headset by itself."
+}
 if ($env:SHADPS4_OPENXR -ne "0" -and [int]$env:SHADPS4_XR_WAIT -gt 0) {
     Say ("The game waits up to " + $env:SHADPS4_XR_WAIT + " seconds for the headset before it starts on the monitor.")
 }
@@ -774,8 +893,7 @@ Say "the headset, it reaches the PC through Virtual Desktop without motion senso
 Say "Where it is in the game comes from your hands: hand tracking on in the headset, and in"
 Say "Virtual Desktop's settings hand tracking forwarded to the PC."
 Say "Hold OPTIONS for a second (or press the PS button) to reset the view."
-Say "No gamepad: the headset's own controllers play (A jump, B punch, right stick = touchpad,"
-Say "press both sticks in to reset the view)."
+Say "The DualSense is what plays the game: the headset's own controllers do not."
 Say "Close the game's window to quit."
 Say ""
 # The emulator asks Windows for about 14 GB at once (the console's memory, and what the larger
@@ -825,9 +943,6 @@ function Show-Log {
                 if ($text -match '^(The title (has|now takes) the player|Hands:|Virtual headset connected)') { continue }
                 if ($text -match '^Headset: the title delivered') {
                     $script:reports++
-                    if (($script:reports % 6) -ne 1) { continue }
-                }
-                if ($text -match '^Controllers: standing in') {
                     if (($script:reports % 6) -ne 1) { continue }
                 }
                 if ($warning) { Say ("  " + $text) "Yellow" } else { Say ("  " + $text) }

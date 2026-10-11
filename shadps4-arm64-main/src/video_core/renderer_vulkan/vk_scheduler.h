@@ -64,6 +64,9 @@ struct FrameStats {
     static void RenderPass(const RenderState& state);
     static void PassEnded(const std::source_location& where);
     static void Draw();
+    /// The size of the viewport a draw is made with: the log lists the sizes that were used
+    /// (a title that scales what it draws under load shows as a viewport smaller than its target).
+    static void Viewport(u32 width, u32 height);
     static void Compute();
     static void Submit();
     /// Called once per presented frame.

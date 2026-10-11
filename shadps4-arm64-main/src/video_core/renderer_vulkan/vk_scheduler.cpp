@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <map>
+#include <mutex>
+#include <utility>
+#include <vector>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -225,6 +229,19 @@ void FrameStats::Draw() {
     }
 }
 
+namespace {
+std::mutex g_viewport_mutex;
+std::map<u64, u64> g_viewport_sizes; // (width << 32 | height) -> draws
+} // namespace
+
+void FrameStats::Viewport(u32 width, u32 height) {
+    if (!Enabled()) {
+        return;
+    }
+    std::scoped_lock lock{g_viewport_mutex};
+    ++g_viewport_sizes[(u64{width} << 32) | u64{height}];
+}
+
 void FrameStats::Compute() {
     if (Enabled()) {
         g_frame_counters.computes.Add();
@@ -402,6 +419,24 @@ void FrameStats::EndFrame() {
                  "of 8 submissions, {:.0f} ms in {} waits for a result",
                  throttle_ms / seconds, static_cast<u64>(static_cast<double>(throttle_count) / seconds),
                  explicit_ms / seconds, static_cast<u64>(static_cast<double>(explicit_count) / seconds));
+    }
+    {
+        std::map<u64, u64> sizes;
+        {
+            std::scoped_lock lock{g_viewport_mutex};
+            sizes.swap(g_viewport_sizes);
+        }
+        std::vector<std::pair<u64, u64>> ranked(sizes.begin(), sizes.end());
+        std::ranges::sort(ranked, [](const auto& a, const auto& b) { return a.second > b.second; });
+        std::string text;
+        for (size_t i = 0; i < ranked.size() && i < 10; ++i) {
+            text += fmt::format("{}{}x{} {:.1f}", i == 0 ? "" : ", ", ranked[i].first >> 32,
+                                ranked[i].first & 0xffffffff,
+                                static_cast<double>(ranked[i].second) / n);
+        }
+        if (!text.empty()) {
+            LOG_INFO(Render_Vulkan, "viewports (size, draws per frame): {}", text);
+        }
     }
     LogThreadCpuUsage(seconds);
     c.frames = 0;

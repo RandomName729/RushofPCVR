@@ -1,29 +1,30 @@
 ﻿# Settings for "run.bat", one key=value a line. Lines starting with # are ignored;
 # what is commented out below shows the value that applies when the line is left out.
 
-# The window at the start (menu=0 to go without it) sets resolution, fps and fov below.
+# The window at the start (menu=0 to go without it) sets the field of view and a few more below.
 
-# The width of each eye's picture: 1440 is the console's largest (what a PlayStation 4 Pro
-# draws, 1440x1536); 1800, 2160, 2520, 2880, 3240 or 3600 have the game draw that much larger
-# (2880 = 2880x3072, four times the pixels), with the memory that takes. The game draws a step
-# smaller by itself while the graphics card cannot keep up; dynamic=0 holds it to the size.
-# game: the console's sizes, chosen by the game itself (816 to 1440).
-#resolution=2880
+# The size each eye is drawn at, in pixels of width: 1152 is the console's own (the picture of
+# a PlayStation 4, 1152x1296 an eye); the larger, the sharper in the headset, and the more
+# work for the graphics card and the more memory the game takes (1536 nearly doubles the
+# pixels, 2048 triples them, 2880 is six times and needs about 3.5 GB more memory).
+# 1152 to 2880; the window sets it with a slider.
+#eye_width=1152
+
+# Not used by this game: it picks its picture by itself, and does not draw smaller where the
+# graphics card falls behind. (The line stays so that older settings files remain valid.)
 #dynamic=1
 
-# The most frames a second: 120, 90, 72, 60, 45, 40, 36 or 30. A frame lasts a whole number of
-# the headset's refreshes, so the refresh rate set in Virtual Desktop (Streaming > Frame rate)
-# decides what is possible: at 120 Hz 120, 60, 40 or 30; at 90 Hz 90, 45 or 30; at 72 Hz 72 or
-# 36. 60 is the console's own. Above 60 the PC has to keep up (this one manages about 100), and
-# the few things the game counts in frames (some animated signs) run faster.
+# Not used by this game yet: it keeps in step with the headset's refresh rate, which Virtual
+# Desktop sets (Streaming > Frame rate).
 #fps=60
 
 # How much of the headset's field of view the game draws, in percent, 70 to 160: at 100 the
 # picture fills all that the headset shows; less puts the same pixels over fewer degrees, a
 # sharper picture with a dark border where the rest was; more draws a wider view (softer, and
-# the coloured corners outside the lens circle move out of sight: 155 is what a Quest 3
-# needs, and the default).
-#fov=155
+# the coloured corners outside the lens circle move out of sight). 120 is the default: the
+# picture looks smoothest there, with no borders (the corners outside the lens circles are
+# black, see mask below). Without the mask, a Quest 3 needs 155 to hide them.
+#fov=120
 
 # What fov is a percent of: headset (the headset being worn, whatever it is: the emulator asks
 # it as the game starts) or psvr (a PlayStation VR's 100 by 103 degrees an eye, the view the
@@ -37,6 +38,19 @@
 # sharpening of its own (Streaming tab): what is here comes on top of it.
 #sharpen=0.3
 
+# Black instead of the coloured corners outside the two lens circles of the picture, so that
+# fov can be set low (about the circle's size: 100 to 110) for a sharper picture without the
+# corners showing. 1 = the circles as drawn, 0 = off. If the picture's edge gets cut off, give
+# a bit more (1.05); if some colour is left at the edge, a bit less (0.97).
+#mask=1
+
+# Which OpenXR runtime the game uses (also in the start-up window): pc, the one the PC has set
+# up (when Virtual Desktop's streamer was the last to set itself, that one); virtualdesktop,
+# Virtual Desktop's; steamvr, SteamVR's (SteamVR is started if it is not running, and the
+# headset has to be connected to it; not tested with this game yet); or the full path of a
+# runtime's .json file.
+#runtime=pc
+
 # The most samples a pixel gets (1, 2, 4, 8). Left out: as the console draws it (4). With 1 the
 # emulator smooths edges itself instead, unless antialias=0.
 #msaa=4
@@ -46,7 +60,7 @@
 # spot in front of you, turned by its own motion sensors. (The hands are what the headset
 # tracks: hand tracking has to be on in the headset, and Virtual Desktop has to pass it on to
 # the PC - its setting for forwarding tracking data. Where it does not, the places it gives
-# the headset's controllers stand in, which it makes up from the hands while they lie unused.)
+# the headset's controllers are used instead, which it makes up from the hands while they lie unused.)
 # The DualSense must be connected to this PC itself (USB cable or Bluetooth): paired with the
 # headset, it reaches the PC through Virtual Desktop without motion sensors and touchpad.
 #hands=1
@@ -59,14 +73,6 @@
 # 0: the right stick no longer doubles as a finger on the touchpad.
 #stick_touchpad=1
 
-# 0: the headset's own controllers never stand in for a gamepad. (They only do while no gamepad
-# is connected to the PC.)
-#controllers=1
-
-# Which of the headset's controllers is the controller in the game while they stand in for a
-# gamepad: right or left.
-#controller_hand=right
-
 # 0: the game's surround sound is folded down to left and right instead of being rendered for
 # the headset's speakers.
 #surround=1
@@ -76,12 +82,10 @@
 # when it waits although the headset is on and shows the game.
 #pause=1
 
-# 0: the game counts time in frames, as on the console (slow motion whenever a frame takes
-# longer than a sixtieth of a second).
+# Not used by this game yet.
 #real_time=1
 
-# The older way to say fps: how many of the headset's pictures every frame is given (1, 2, 3...).
-# Takes the place of fps when set.
+# Not used by this game yet.
 #pace=2
 
 # Seconds to wait for a headset before the game starts on the monitor without one. A headset
@@ -98,7 +102,7 @@
 
 # Extra environment variables for the emulator, as many lines as needed.
 #env=NAME=value
-resolution=2880
+eye_width=1152
 fps=60
-fov=155
+fov=120
 menu=1

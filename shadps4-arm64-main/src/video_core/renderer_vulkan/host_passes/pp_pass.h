@@ -26,6 +26,11 @@ public:
         float sharpen = 0.0f;
         /// For an output image of an sRGB format, which does the encoding for display itself.
         u32 linear_out = 0;
+        /// 0: off. Above: the picture outside the two lens circles of a title that draws both
+        /// eyes into one picture goes black; the value scales the circles' size.
+        float mask = 0.0f;
+        /// 0: off. Above (up to 1): edges are smoothed, the more the higher (post_process.frag).
+        float fxaa = 0.0f;
     };
 
     void Create(const Instance& instance, MasterSemaphore* master_semaphore,

@@ -12,6 +12,12 @@ struct Vec3;
 /// What is known about the inner workings of particular titles, and what the emulator does with
 /// it. Everything here applies to one exact build of one title and does nothing for any other.
 ///
+/// Until Dawn: Rush of Blood (CUSA03683, CUSA02350):
+///  - It draws both eyes into one picture, side by side, 2304x1296 on the console and 2688x1512
+///    on its Pro model, from a list of sizes in its data and a pool of graphics memory that
+///    is larger by 200 MB on the Pro. SHADPS4_ROB_EYE_WIDTH=<pixels> (1152 on the console, up
+///    to 2880) writes a larger size of the same shape into the list, and the pool with it.
+///
 /// Astro Bot Rescue Mission (CUSA12392):
 ///  - It advances its world by one sixtieth of a second for every frame it draws, however long
 ///    the frame took: where frames take longer than that, on anything slower than the console
@@ -44,7 +50,8 @@ void NoteView(const Vr::Vec3& tracker_head);
 
 /// Called once the title is known and before its memory is set up. A title that is to draw
 /// larger pictures than on the console (SHADPS4_TITLE_EYE_WIDTH=<pixels>, the width of the
-/// largest, 1440 on the console) needs more memory than the console has.
+/// largest, 1440 on the console; Rush of Blood: SHADPS4_ROB_EYE_WIDTH=<pixels>) needs more
+/// memory than the console has.
 void Prepare();
 
 /// Called when the title's executable is in memory, before any of it runs: the sizes the title
