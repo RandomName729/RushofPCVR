@@ -3,6 +3,20 @@
 All notable changes to RushVR, newest first. RushVR is shadPS4 plus a VR layer and the fixes that
 let Until Dawn: Rush of Blood run under emulation.
 
+## 0.3.5 - 2026-10-17
+
+The start-up window and the start file, ahead of the Motion edition (the Quest controllers playing
+as PlayStation Move wands), which is separate. The emulator itself is that of 0.3.0.
+
+- **One start file.** `Play Rush of Blood.bat` replaces `run.bat` and
+  `Play Rush of Blood (DualSense).bat`.
+- **A "Controllers" card in the start-up window**: a switch for playing with the Quest controllers
+  as Move wands and three sliders for them (aim angle, reach, turning, with a "Recommended"
+  button). In this edition they are greyed out and do nothing: they come alive in the Motion
+  edition, which has the emulator support for them (`controllers`, `move_pitch`, `move_reach` and
+  `move_turn` in `settings.txt`).
+- Disabled switches, sliders and buttons in the window now look disabled.
+
 ## 0.3.0 - 2026-10-17
 
 The big ones: the game now runs at the speed it was made for, at a steady 50 to 60 frames a

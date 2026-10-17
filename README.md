@@ -14,14 +14,16 @@ depth buffers, its timing and resolution).
 
 ## Status
 
-**Early work in progress** (version 0.3.0), built and tested by one person on one PC and one Quest 3.
+**Early work in progress** (version 0.3.5), built and tested by one person on one PC and one Quest 3.
 See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 
 - The title screen, the intro and **levels 1 to 4** play through (the tester went as far as level
   4; later levels are untested).
 - Controls: the **DualSense** is the controller (buttons, sticks, touchpad, motion sensors). The
-  headset's own controllers do not play the game, and the PlayStation Move controllers are not
-  supported in this version.
+  start-up window has a "Controllers" card for playing with the Quest controllers as PlayStation
+  Move wands; it is switched off (greyed out) here, because that comes with the separate Motion
+  edition, not with this free one. In this edition the headset's own controllers do not play the
+  game, and the Move controllers are not supported.
 - Speed: with Virtual Desktop at 120 Hz the game is held to 60 frames a second and, on a high-end
   laptop (Core i9-14900HX, GeForce RTX 4080 Laptop) at 2304 pixels an eye, ran at a median of about
   50 in level 1, mostly between 43 and 60. The game keeps its console speed: the captions stay with
@@ -70,10 +72,10 @@ See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
    start-up window, with the headset connected to SteamVR first. It has been tested through
    level 4 and runs well.)
 4. **Connect the DualSense to the PC.**
-5. **Connect to the PC with Virtual Desktop**, then start **`Play Rush of Blood (DualSense).bat`**
+5. **Connect to the PC with Virtual Desktop**, then start **`Play Rush of Blood.bat`**
    on the desktop you see in the headset. A small window lets you choose the headset connection (Virtual Desktop
    or SteamVR), the resolution, the field of view, texture sharpness, edge smoothing, the corner
-   mask, the frame rate and PS4 Pro mode; Play starts the game, and the headset switches to it after a few seconds.
+   mask, the frame rate and PS4 Pro mode (and, in the Motion edition only, the Quest controllers); Play starts the game, and the headset switches to it after a few seconds.
 6. In the game's own start-up question, choose the **DualShock** controller, not the Move
    controllers.
 
@@ -141,7 +143,7 @@ cmake --build Build\x64-Clang-Release --target shadps4 -j 4
 
 (Open the folder in Visual Studio to make the `x64-Clang-Release` configuration the first time; it
 is described in `CMakeSettings.json`.) Copy the resulting `shadps4.exe` into `pc-vr`, next to
-`launch.ps1` and `settings.txt`, and start the game with `Play Rush of Blood (DualSense).bat`.
+`launch.ps1` and `settings.txt`, and start the game with `Play Rush of Blood.bat`.
 
 ## License
 

@@ -1,4 +1,4 @@
-﻿# Settings for "run.bat", one key=value a line. Lines starting with # are ignored;
+﻿# Settings for "Play Rush of Blood.bat", one key=value a line. Lines starting with # are ignored;
 # what is commented out below shows the value that applies when the line is left out.
 
 # The window at the start (menu=0 to go without it) sets the field of view and a few more below.
@@ -116,6 +116,20 @@
 # folder, or its .pkg package (which is then unpacked into the games folder). The launcher
 # writes this line itself when it has to ask where the game is.
 #game=C:\path\to\CUSA03683\eboot.bin
+
+# Which controllers play the game: dualsense (the default), or quest (the Quest controllers play
+# as the game's two PlayStation Move wands). Quest is for the Motion edition only: it needs that
+# edition's emulator, and the window greys the choice out without it. (The window sets it.)
+#controllers=dualsense
+
+# The Motion edition's Quest controllers, set by three sliders in the window: move_pitch, how
+# far the in-game guns are raised above the way the controller points, in degrees (0 to 90);
+# move_reach, how far the in-game hands move when yours do, in percent of your own movement (5 to
+# 130); and move_turn, how far the guns turn when you turn your wrist, in percent (5 to 130).
+# Ignored without the Motion edition.
+#move_pitch=35
+#move_reach=35
+#move_turn=42
 
 # Extra environment variables for the emulator, as many lines as needed.
 #env=NAME=value

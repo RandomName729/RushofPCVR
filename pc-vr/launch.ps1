@@ -1,6 +1,6 @@
 # Starts Until Dawn: Rush of Blood in the emulator for a headset connected to this PC (Virtual
 # Desktop, or anything else with an OpenXR runtime), and tells what is going on while it runs.
-# Started by "run.bat"; settings are in settings.txt next to this file, and the
+# Started by "Play Rush of Blood.bat"; settings are in settings.txt next to this file, and the
 # main ones can be chosen in a small window before the game starts.
 param([string]$SettingsFile = "", [switch]$NoMenu)
 
@@ -47,6 +47,18 @@ function Save-Setting([string]$key, [string]$value) {
     Set-Content -Path $SettingsFile -Value $lines -Encoding UTF8
 }
 Read-Settings
+
+# The Motion edition (the one with the Quest controllers playing as PlayStation Move wands) has a
+# file "edition.txt" saying "motion" next to this launcher. Without it the choice of controllers
+# below stays switched off: the emulator of the free edition has no Move support in it.
+function Test-MotionEdition {
+    try {
+        $marker = Join-Path $here "edition.txt"
+        if (Test-Path -LiteralPath $marker) { return ([IO.File]::ReadAllText($marker) -match '(?i)motion') }
+    } catch {}
+    return $false
+}
+$motionEdition = Test-MotionEdition
 
 # PS4 Pro mode ("neo_mode" in user\config.json): the emulator then tells the game it runs on a
 # PlayStation 4 Pro, which gives sharper textures. The emulator reads it as it starts.
@@ -115,6 +127,17 @@ namespace RushUi
         public static readonly Color Accent = Color.FromArgb(232, 69, 79);
         public static readonly Color AccentHover = Color.FromArgb(243, 98, 107);
         public static readonly Color AccentDown = Color.FromArgb(200, 52, 62);
+
+        // Over a control that is switched off: lets it fade into the card behind it.
+        public static void Dim(Graphics g, Control c)
+        {
+            if (c.Enabled) { return; }
+            Color back = c.Parent != null ? c.Parent.BackColor : Back;
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(150, back)))
+            {
+                g.FillRectangle(b, 0, 0, c.Width, c.Height);
+            }
+        }
 
         public static GraphicsPath Round(RectangleF r, float radius)
         {
@@ -435,7 +458,10 @@ namespace RushUi
                 g.FillEllipse(knob, tx - 8f, cy - 8f, 16f, 16f);
                 g.DrawEllipse(ring, tx - 8f, cy - 8f, 16f, 16f);
             }
+            Theme.Dim(g, this);
         }
+
+        protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
 
         private void SetFromX(int x)
         {
@@ -548,7 +574,10 @@ namespace RushUi
             TextRenderer.DrawText(g, Text, Font, new Rectangle(48, 0, Math.Max(1, Width - 48), Height), Theme.Text,
                                   TextFormatFlags.VerticalCenter | TextFormatFlags.Left |
                                   TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            Theme.Dim(g, this);
         }
+
+        protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
 
         protected override void OnClick(EventArgs e)
         {
@@ -604,7 +633,10 @@ namespace RushUi
             TextRenderer.DrawText(g, Text, buttonFont, new Rectangle(0, 0, Width, Height), Color.White,
                                   TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
                                   TextFormatFlags.NoPadding);
+            Theme.Dim(g, this);
         }
+
+        protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
 
         protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; Invalidate(); }
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; down = false; Invalidate(); }
@@ -1423,10 +1455,12 @@ function Show-MenuModern {
         $cText = [RushUi.Theme]::Text
         $cDim = [RushUi.Theme]::Dim
         $cAccent = [RushUi.Theme]::Accent
+        # The controllers card sits above the bottom row.
+        $dy = 124
 
         $form = New-Object System.Windows.Forms.Form
         $form.Text = "RushVR"
-        $form.ClientSize = New-Object System.Drawing.Size(736, 618)
+        $form.ClientSize = New-Object System.Drawing.Size(736, (618 + $dy))
         $form.StartPosition = "CenterScreen"
         $form.FormBorderStyle = "FixedDialog"
         $form.MaximizeBox = $false
@@ -1537,29 +1571,86 @@ function Show-MenuModern {
         $targetBox = New-Dropdown $rate $targetNames (Find-Nearest ([double[]]$targetKeys) (Read-Number "target_fps" 60)) 18 46 296
         [void](New-Label $rate "The emulator holds the game to this rate. 60 is the game's own and looks smoothest with Virtual Desktop's frame rate at 120 (Streaming tab); at 90 or 80 use 45 or 40. Lower is steadier on a slower PC." 18 90 296 66 $cDim 8.5)
 
+        # Controllers: the DualSense, or the Quest controllers playing as Move wands (Motion edition).
+        $moveCard = New-Card "Controllers" 24 540 688 108
+        $form.Controls.Add($moveCard)
+        $moveOn = New-Object RushUi.Toggle
+        $moveOn.Text = $(if ($motionEdition) { "Quest controllers as Move wands" } else { "Quest controllers as Move wands (Motion edition)" })
+        $moveOn.SetBounds(124, 6, 420, 26)
+        $moveOn.Checked = ($motionEdition -and ((Setting "controllers" "dualsense") -eq "quest"))
+        $moveOn.Enabled = $motionEdition
+        $moveCard.Controls.Add($moveOn)
+        $tips.SetToolTip($moveOn, "Plays with the Quest controllers, as the game's two PlayStation Move wands, instead of the DualSense. In the game's start-up question choose the Move controllers. Motion edition only.")
+        $moveDefaults = @(35, 35, 42)
+        $moveKeys = @("move_pitch", "move_reach", "move_turn")
+        $moveTitles = @("Aim angle", "Reach", "Turning")
+        $moveLimits = @(@(0, 90), @(5, 130), @(5, 130))
+        $moveUnits = @(" degrees up", "%", "%")
+        $moveTips = @(
+            "Raises the in-game gun from the way the Quest controller points. A Quest controller's handle is tilted down from where you point it, so with 0 the guns follow the handle and point lower than you aim. Raise it if they point down when your controller is straight ahead, lower it if they point up. Recommended: 35.",
+            "How far the in-game hands move when you move yours, measured from your head. 100% is as far as you really move. Lower it if the hands move too much. Recommended: 35% (the game itself exaggerates what its Move wands do).",
+            "How much the in-game guns turn when you turn your wrist, measured from level and facing where you face. 100% is as far as you really turn. Lower it if the aim is too touchy. Recommended: 42%."
+        )
+        $moveSliders = @()
+        $moveValues = @()
+        for ($i = 0; $i -lt 3; $i++) {
+            $x = 18 + $i * 224
+            $start = [int][math]::Round((Read-Number $moveKeys[$i] $moveDefaults[$i]))
+            $start = [math]::Max($moveLimits[$i][0], [math]::Min($moveLimits[$i][1], $start))
+            [void](New-Label $moveCard $moveTitles[$i] $x 46 100 20 $cDim 9)
+            $moveValues += (New-Label $moveCard "" ($x + 100) 46 100 20 $cAccent 9.5 "Segoe UI Semibold" "TopRight")
+            $slider = New-Slider $moveCard $moveLimits[$i][0] $moveLimits[$i][1] $start $x 66 200
+            $tips.SetToolTip($slider, $moveTips[$i])
+            $moveSliders += $slider
+        }
+        $moveUpdate = {
+            for ($j = 0; $j -lt 3; $j++) {
+                $moveValues[$j].Text = ("" + $moveSliders[$j].Value + $moveUnits[$j])
+            }
+        }
+        foreach ($slider in $moveSliders) { $slider.Add_ValueChanged($moveUpdate) }
+        & $moveUpdate
+        $moveReset = New-Object RushUi.FlatButton
+        $moveReset.Text = "Recommended"
+        $moveReset.SetBounds(556, 6, 116, 28)
+        $moveReset.Add_Click({
+            for ($j = 0; $j -lt 3; $j++) { $moveSliders[$j].Value = $moveDefaults[$j] }
+        })
+        $moveCard.Controls.Add($moveReset)
+        $tips.SetToolTip($moveReset, "Puts the three sliders back to what is recommended.")
+        # The sliders can be moved only while the Quest controllers are chosen (and owned).
+        $moveEnable = {
+            $live = ($moveOn.Enabled -and $moveOn.Checked)
+            foreach ($slider in $moveSliders) { $slider.Enabled = $live }
+            $moveReset.Enabled = $live
+            foreach ($label in $moveValues) { $label.ForeColor = $(if ($live) { $cAccent } else { $cDim }) }
+        }
+        $moveOn.Add_CheckedChanged($moveEnable)
+        & $moveEnable
+
         # Bottom row.
         $neo = New-Object RushUi.Toggle
         $neo.Text = "PS4 Pro mode (sharper textures)"
         $neo.Checked = Get-NeoMode
-        $neo.SetBounds(24, 540, 380, 26)
+        $neo.SetBounds(24, (540 + $dy), 380, 26)
         $form.Controls.Add($neo)
         $tips.SetToolTip($neo, "The game is told it runs on a PlayStation 4 Pro, which gives sharper textures. Takes effect as the game starts.")
         $again = New-Object RushUi.Toggle
         $again.Text = "Show this window at every start"
         $again.Checked = (Setting "menu" "1") -ne "0"
-        $again.SetBounds(24, 570, 380, 26)
+        $again.SetBounds(24, (570 + $dy), 380, 26)
         $form.Controls.Add($again)
 
         $play = New-Object RushUi.FlatButton
         $play.Text = "Play"
         $play.Primary = $true
-        $play.SetBounds(592, 548, 120, 40)
+        $play.SetBounds(592, (548 + $dy), 120, 40)
         $play.DialogResult = [System.Windows.Forms.DialogResult]::OK
         $form.Controls.Add($play)
         $form.AcceptButton = $play
         $quit = New-Object RushUi.FlatButton
         $quit.Text = "Quit"
-        $quit.SetBounds(476, 548, 104, 40)
+        $quit.SetBounds(476, (548 + $dy), 104, 40)
         $quit.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
         $form.Controls.Add($quit)
         $form.CancelButton = $quit
@@ -1579,6 +1670,10 @@ function Show-MenuModern {
     Save-Setting "mask" ($maskKeys[$maskBox.SelectedIndex])
     Save-Setting "target_fps" ($targetKeys[$targetBox.SelectedIndex])
     Save-Setting "fov" ($fov.Value * 5)
+    if ($motionEdition) {
+        Save-Setting "controllers" ($(if ($moveOn.Checked) { "quest" } else { "dualsense" }))
+        for ($i = 0; $i -lt 3; $i++) { Save-Setting $moveKeys[$i] ("" + $moveSliders[$i].Value) }
+    }
     Save-Setting "menu" ($(if ($again.Checked) { "1" } else { "0" }))
     Set-NeoMode $neo.Checked
     Read-Settings
@@ -1649,6 +1744,21 @@ $fxaa = 0.65
 if (-not [double]::TryParse((Setting "fxaa" "0.65"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$fxaa)) { $fxaa = 0.65 }
 $fxaa = [math]::Max(0.0, [math]::Min(1.0, $fxaa))
 if ($fxaa -gt 0) { $env:SHADPS4_VR_FXAA = $fxaa.ToString([System.Globalization.CultureInfo]::InvariantCulture) }
+# Motion edition: the Quest controllers play as Move wands when "controllers=quest" (the window sets
+# it); move_pitch is in degrees, move_reach and move_turn in percent. What is not set is left to the
+# emulator's own recommended values.
+Remove-Item -Path Env:SHADPS4_QUEST_MOVE -ErrorAction SilentlyContinue
+if ($motionEdition -and (Setting "controllers" "dualsense") -eq "quest") { $env:SHADPS4_QUEST_MOVE = "1" }
+if ($env:SHADPS4_QUEST_MOVE -eq "1") {
+    $moveEnv = @(@("move_pitch", "SHADPS4_QUEST_MOVE_PITCH", 1.0), @("move_reach", "SHADPS4_QUEST_MOVE_SCALE", 0.01), @("move_turn", "SHADPS4_QUEST_MOVE_TURN", 0.01))
+    foreach ($entry in $moveEnv) {
+        $number = 0.0
+        $raw = Setting $entry[0] ""
+        if ($raw -ne "" -and [double]::TryParse($raw, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$number)) {
+            Set-Item -Path ("Env:" + $entry[1]) -Value (($number * $entry[2]).ToString([System.Globalization.CultureInfo]::InvariantCulture))
+        }
+    }
+}
 if ((Setting "msaa") -ne "") { $env:SHADPS4_MAX_MSAA = Setting "msaa" }
 if ((Setting "antialias" "1") -eq "0") { $env:SHADPS4_RESOLVE_AA = "0" }
 if ((Setting "hands" "1") -eq "0") { $env:SHADPS4_XR_HANDS = "0" }
@@ -1773,12 +1883,20 @@ if ($runtime -match "steam") {
 if ($env:SHADPS4_OPENXR -ne "0" -and [int]$env:SHADPS4_XR_WAIT -gt 0) {
     Say ("The game waits up to " + $env:SHADPS4_XR_WAIT + " seconds for the headset before it starts on the monitor.")
 }
-Say "The DualSense: connect it to THIS PC (USB cable, or Bluetooth paired with the PC). Paired with"
-Say "the headset, it reaches the PC through Virtual Desktop without motion sensors or touchpad."
-Say "Where it is in the game comes from your hands: hand tracking on in the headset, and in"
-Say "Virtual Desktop's settings hand tracking forwarded to the PC."
-Say "Hold OPTIONS for a second (or press the PS button) to reset the view."
-Say "The DualSense is what plays the game: the headset's own controllers do not."
+if ($env:SHADPS4_QUEST_MOVE -eq "1") {
+    Say "Move controllers: your Quest controllers play as the game's two PlayStation Move wands."
+    Say "In the game's start-up question choose the Move controllers, then press the grip button"
+    Say "(the MOVE button) on the controller you hold. Right hand = the first wand."
+    Say "Trigger = T, grip = MOVE, A/X = cross, B/Y = circle, stick click = square,"
+    Say "stick up = triangle, stick down = select, left menu = start (hold it for a second to reset the view)."
+} else {
+    Say "The DualSense: connect it to THIS PC (USB cable, or Bluetooth paired with the PC). Paired with"
+    Say "the headset, it reaches the PC through Virtual Desktop without motion sensors or touchpad."
+    Say "Where it is in the game comes from your hands: hand tracking on in the headset, and in"
+    Say "Virtual Desktop's settings hand tracking forwarded to the PC."
+    Say "Hold OPTIONS for a second (or press the PS button) to reset the view."
+    Say "The DualSense is what plays the game: the headset's own controllers do not."
+}
 Say "Close the game's window to quit."
 Say ""
 # The emulator asks Windows for about 14 GB at once (the console's memory, and what the larger

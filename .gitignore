@@ -11,8 +11,7 @@
 !/RELEASE-NOTES-*.md
 !/LICENSE
 !/THIRD-PARTY-NOTICES.md
-!/run.bat
-!/Play Rush of Blood (DualSense).bat
+!/Play Rush of Blood.bat
 !/shadps4-arm64-main/
 
 # The PC play folder: only the launcher, its settings and the clean starting files of a release

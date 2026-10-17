@@ -32,7 +32,7 @@ Need $Exe "emulator (build it first, see the top of this script)"
 foreach ($name in "PkgTool.exe", "LibOrbisPkg.dll", "LICENSE.txt") {
     Need (Join-Path $PkgToolDir $name) "PkgTool file (see the top of this script)"
 }
-foreach ($path in "pc-vr\launch.ps1", "pc-vr\settings.txt", "run.bat", "Play Rush of Blood (DualSense).bat",
+foreach ($path in "pc-vr\launch.ps1", "pc-vr\settings.txt", "Play Rush of Blood.bat",
                   "pc-vr\template\user\config.json", "pc-vr\template\user\input_config\default.ini",
                   "pc-vr\template\user\input_config\global.ini", "LICENSE", "THIRD-PARTY-NOTICES.md",
                   "CHANGELOG.md") {
@@ -60,8 +60,7 @@ foreach ($dir in "pc-vr\user\input_config", "games", "pc-vr\pkgtool",
 
 Copy-Item -LiteralPath $Exe -Destination (Join-Path $pc "pc-vr\shadps4.exe")
 Copy-Item -LiteralPath (Join-Path $root "pc-vr\launch.ps1") -Destination (Join-Path $pc "pc-vr\")
-Copy-Item -LiteralPath (Join-Path $root "run.bat") -Destination $pc
-Copy-Item -LiteralPath (Join-Path $root "Play Rush of Blood (DualSense).bat") -Destination $pc
+Copy-Item -LiteralPath (Join-Path $root "Play Rush of Blood.bat") -Destination $pc
 Copy-Item -LiteralPath (Join-Path $root "pc-vr\template\user\config.json") -Destination (Join-Path $pc "pc-vr\user\")
 Copy-Item -Path (Join-Path $root "pc-vr\template\user\input_config\*.ini") -Destination (Join-Path $pc "pc-vr\user\input_config\")
 foreach ($file in "PkgTool.exe", "LibOrbisPkg.dll", "LICENSE.txt") {
@@ -94,7 +93,7 @@ Write-Text (Join-Path $pc "pc-vr\settings.txt") ((@($documented) + $defaults) -j
 $source = if ($RepoUrl -ne "") { "The source is at $RepoUrl" } else { "The source is in the repository this package was published from" }
 Write-Text (Join-Path $pc "games\PUT YOUR GAME HERE.txt") @"
 Put your own copy of Until Dawn: Rush of Blood (US release CUSA03683, version 1.00) in this
-folder, then start "Play Rush of Blood (DualSense).bat". Either form will do, anywhere in here:
+folder, then start "Play Rush of Blood.bat". Either form will do, anywhere in here:
 
 - the game's folder, the one with eboot.bin in it, or
 - the game's .pkg file: it is unpacked the first time, which takes a minute or so.
@@ -118,16 +117,17 @@ through Virtual Desktop.
    (SteamVR can be used instead: pick it under "Headset connection" in the start-up window,
    with the headset connected to SteamVR first. It has been tested through level 4.)
 3. Connect the DualSense to this PC (USB cable, or Bluetooth paired with the PC, not with the
-   headset). The headset's own controllers do not play the game.
-4. Connect Virtual Desktop to this PC, then start "Play Rush of Blood (DualSense).bat". (If the
+   headset). The headset's own controllers do not play the game in this edition (the "Controllers"
+   card in the start-up window, greyed out here, is for the separate Motion edition).
+4. Connect Virtual Desktop to this PC, then start "Play Rush of Blood.bat". (If the
    Microsoft Visual C++ runtime is missing, it says so and offers Microsoft's download.)
 5. In the game's own start-up question, choose the DualShock controller, not the Move
    controllers (they are not supported).
 
-What is new in $Version (the whole list is in CHANGELOG.md): the game runs at the speed it was made for,
-with the captions in step with the voice, at 50 to 60 frames a second with a steady "Aim for" rate;
-the garbled textures are gone; textures are sharper (16x anisotropic filtering, PS4 Pro mode);
-FXAA is back; a new start-up window.
+What is new in $Version (the whole list is in CHANGELOG.md): one start file; a "Controllers" card in
+the start-up window for the Motion edition (greyed out in this one). From 0.3.0: the game runs at the
+speed it was made for, with the captions in step with the voice, at 50 to 60 frames a second with a
+steady "Aim for" rate; the garbled textures are gone; textures are sharper; FXAA is back.
 
 This is still an early version: the title screen, the intro and levels 1 to 4 play through
 (later levels are untested). The picture can still look pixelated or soft in the headset, and the
