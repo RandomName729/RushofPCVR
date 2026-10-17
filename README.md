@@ -158,7 +158,7 @@ The libraries under `shadps4-arm64-main/externals` keep their own licenses (see
 Until Dawn: Rush of Blood, PlayStation and PlayStation VR are trademarks of Sony Interactive
 Entertainment. This project is not affiliated with, endorsed or sponsored by Sony Interactive
 Entertainment, Supermassive Games or Meta. It contains no game, firmware, keys or other
-copyrighted console files: use it only with software you own and have dumped yourself.
+copyrighted console files.
 
 ## Thanks
 
