@@ -102,9 +102,9 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-# --- the window (the new look) -----------------------------------------------------------------
+# --- the window ---------------------------------------------------------------------------------
 # The controls of the window are drawn by the launcher itself (the small program below, built
-# when the launcher starts). When that cannot be built, the plain window further down is used.
+# when the launcher starts). If that cannot be built, a message says why and the game starts with the saved settings.
 $uiSource = @'
 using System;
 using System.Collections.Generic;
@@ -129,7 +129,7 @@ namespace RushUi
         public static readonly Color AccentDown = Color.FromArgb(200, 52, 62);
 
         // Over a control that is switched off: lets it fade into the card behind it.
-        public static void Dim(Graphics g, Control c)
+        public static void Fade(Graphics g, Control c)
         {
             if (c.Enabled) { return; }
             Color back = c.Parent != null ? c.Parent.BackColor : Back;
@@ -458,7 +458,7 @@ namespace RushUi
                 g.FillEllipse(knob, tx - 8f, cy - 8f, 16f, 16f);
                 g.DrawEllipse(ring, tx - 8f, cy - 8f, 16f, 16f);
             }
-            Theme.Dim(g, this);
+            Theme.Fade(g, this);
         }
 
         protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
@@ -574,7 +574,7 @@ namespace RushUi
             TextRenderer.DrawText(g, Text, Font, new Rectangle(48, 0, Math.Max(1, Width - 48), Height), Theme.Text,
                                   TextFormatFlags.VerticalCenter | TextFormatFlags.Left |
                                   TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-            Theme.Dim(g, this);
+            Theme.Fade(g, this);
         }
 
         protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
@@ -633,7 +633,7 @@ namespace RushUi
             TextRenderer.DrawText(g, Text, buttonFont, new Rectangle(0, 0, Width, Height), Color.White,
                                   TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
                                   TextFormatFlags.NoPadding);
-            Theme.Dim(g, this);
+            Theme.Fade(g, this);
         }
 
         protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
@@ -663,7 +663,7 @@ function Enable-ModernUi {
         Add-Type -TypeDefinition $uiSource -ReferencedAssemblies @("System.Windows.Forms", "System.Drawing") -Language CSharp -ErrorAction Stop
         $script:modernUi = $true
     } catch {
-        Say ("The new look of the window could not be built (" + $_.Exception.Message + "); the plain window is used.") "Yellow"
+        $script:windowError = $_.Exception.Message
     }
 }
 
@@ -1123,279 +1123,6 @@ function Test-Runtime {
     return $true
 }
 
-# --- the window (the plain one, when the new look cannot be built) ----------------------------
-function Show-MenuClassic {
-
-    $form = New-Object System.Windows.Forms.Form
-    $form.Text = "RushVR"
-    $form.ClientSize = New-Object System.Drawing.Size(560, 620)
-    $form.StartPosition = "CenterScreen"
-    $form.FormBorderStyle = "FixedDialog"
-    $form.MaximizeBox = $false
-    $form.MinimizeBox = $false
-    $form.TopMost = $true
-    $form.Font = New-Object System.Drawing.Font("Segoe UI", 9.5)
-
-    $y = 14
-    $title = New-Object System.Windows.Forms.Label
-    $title.Text = "Until Dawn: Rush of Blood - PC VR"
-    $title.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
-    $title.SetBounds(16, $y, 520, 26)
-    $form.Controls.Add($title)
-    $y += 40
-
-    # Headset connection.
-    $label = New-Object System.Windows.Forms.Label
-    $label.Text = "Headset connection (OpenXR runtime)"
-    $label.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-    $label.SetBounds(16, $y, 520, 20)
-    $form.Controls.Add($label)
-    $y += 24
-    $runtimeNames = @("As the PC has it set up", "Virtual Desktop", "SteamVR")
-    $runtimeKeys = @("pc", "virtualdesktop", "steamvr")
-    $runtimeBox = New-Object System.Windows.Forms.ComboBox
-    $runtimeBox.DropDownStyle = "DropDownList"
-    foreach ($name in $runtimeNames) { [void]$runtimeBox.Items.Add($name) }
-    $runtimeBox.SetBounds(16, $y, 240, 26)
-    $index = [array]::IndexOf($runtimeKeys, (Setting "runtime" "pc"))
-    if ($index -lt 0) { $index = 0 }
-    $runtimeBox.SelectedIndex = $index
-    $form.Controls.Add($runtimeBox)
-    $y += 32
-    $runtimeText = New-Object System.Windows.Forms.Label
-    $runtimeText.SetBounds(16, $y, 530, 44)
-    $form.Controls.Add($runtimeText)
-    $updateRuntime = {
-        $runtimeText.Text = switch ($runtimeBox.SelectedIndex) {
-            1 { "Through Virtual Desktop's streamer, which is started if it is not running. In the headset, connect Virtual Desktop to this PC." }
-            2 { "Through SteamVR, which is started if it is not running: the headset has to be connected to it first. Not tested with this game yet." }
-            default { "Whichever runtime the PC has set as its OpenXR runtime (Virtual Desktop's streamer sets itself when it starts)." }
-        }
-    }
-    $runtimeBox.Add_SelectedIndexChanged($updateRuntime)
-    & $updateRuntime
-    $y += 48
-
-    # Resolution.
-    $label = New-Object System.Windows.Forms.Label
-    $label.Text = "Resolution of each eye"
-    $label.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-    $label.SetBounds(16, $y, 520, 20)
-    $form.Controls.Add($label)
-    $y += 22
-    $resolution = New-Object System.Windows.Forms.TrackBar
-    $resolution.Minimum = 0
-    $resolution.Maximum = $widths.Count - 1
-    $resolution.TickFrequency = 1
-    $resolution.LargeChange = 1
-    $resolution.SetBounds(12, $y, 530, 40)
-    $current = 0
-    [void][int]::TryParse((Setting "eye_width" "$defaultWidth"), [ref]$current)
-    $index = [array]::IndexOf($widths, $current)
-    if ($index -lt 0) { $index = [array]::IndexOf($widths, $defaultWidth) }
-    $resolution.Value = $index
-    $form.Controls.Add($resolution)
-    $y += 42
-    $resolutionText = New-Object System.Windows.Forms.Label
-    $resolutionText.SetBounds(16, $y, 530, 38)
-    $form.Controls.Add($resolutionText)
-    $update = {
-        $w = $widths[$resolution.Value]
-        $h = EyeHeight $w
-        $times = ($w * $h) / (1152.0 * 1296.0)
-        $what = if ($w -eq 1152) { "the console's own: the sharpness of the PlayStation 4" } elseif ($w -gt 2048) { "{0:N1} times the pixels of the console's: very demanding, it needs a lot of graphics memory and about {1:N1} GB more memory" -f $times, (($times - 1) * 0.64) } else { "{0:N2} times the pixels of the console's: more work for the graphics card, and more memory" -f $times }
-        $resolutionText.Text = "$w x $h pixels for each eye: $what. Start lower if the game stutters."
-    }
-    $resolution.Add_ValueChanged($update)
-    & $update
-    $y += 46
-
-    # Field of view.
-    $label = New-Object System.Windows.Forms.Label
-    $label.Text = "Field of view"
-    $label.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-    $label.SetBounds(16, $y, 520, 20)
-    $form.Controls.Add($label)
-    $y += 22
-    $fov = New-Object System.Windows.Forms.TrackBar
-    $fov.Minimum = 14
-    $fov.Maximum = 32
-    $fov.TickFrequency = 1
-    $fov.LargeChange = 1
-    $fov.SetBounds(12, $y, 300, 40)
-    $fov.Value = [math]::Max(14, [math]::Min(32, [int]([int](Setting "fov" "120") / 5)))
-    $form.Controls.Add($fov)
-    $fovText = New-Object System.Windows.Forms.Label
-    $fovText.SetBounds(316, $y + 4, 230, 40)
-    $form.Controls.Add($fovText)
-    $ofPsvr = (Setting "fov_of" "psvr") -eq "psvr"
-    $updateFov = {
-        $percent = $fov.Value * 5
-        if ($percent -eq 100) {
-            $fovText.Text = $(if ($ofPsvr) { "100%: PlayStation VR's own" } else { "100%: all that the headset shows" })
-        } elseif ($percent -eq 120 -and $ofPsvr) {
-            $fovText.Text = "120%: the smoothest picture, no borders (the corners are black)"
-        } elseif ($percent -eq 155 -and $ofPsvr) {
-            $fovText.Text = "155%: the Quest 3's own, no lens corners in view"
-        } elseif ($percent -gt 100) {
-            $fovText.Text = "$percent% of it: the game draws a wider view (softer picture, no border)"
-        } else {
-            $fovText.Text = "$percent% of it: sharper, with a dark border"
-        }
-    }
-    $fov.Add_ValueChanged($updateFov)
-    & $updateFov
-    $y += 46
-
-    # Edges and corners.
-    $label = New-Object System.Windows.Forms.Label
-    $label.Text = "Picture quality"
-    $label.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-    $label.SetBounds(16, $y, 520, 20)
-    $form.Controls.Add($label)
-    $y += 26
-
-    $anisoValues = @("0", "2", "4", "8", "16")
-    $anisoNames = @("Off (as the game draws)", "2x", "4x", "8x", "16x (recommended)")
-    $label = New-Object System.Windows.Forms.Label
-    $label.Text = "Sharper textures (anisotropic)"
-    $label.SetBounds(16, $y + 3, 170, 22)
-    $form.Controls.Add($label)
-    $anisoBox = New-Object System.Windows.Forms.ComboBox
-    $anisoBox.DropDownStyle = "DropDownList"
-    foreach ($name in $anisoNames) { [void]$anisoBox.Items.Add($name) }
-    $anisoBox.SetBounds(190, $y, 300, 26)
-    $anisoNow = 16
-    [void][int]::TryParse((Setting "aniso" "16"), [ref]$anisoNow)
-    $best = 4
-    $bestDistance = 1000
-    for ($i = 0; $i -lt $anisoValues.Count; $i++) {
-        $distance = [math]::Abs([int]$anisoValues[$i] - $anisoNow)
-        if ($distance -lt $bestDistance) { $best = $i; $bestDistance = $distance }
-    }
-    $anisoBox.SelectedIndex = $best
-    $form.Controls.Add($anisoBox)
-    $y += 32
-
-    $fxaaValues = @("0", "0.35", "0.65", "1")
-    $fxaaNames = @("Off", "Light", "Normal", "Strong")
-    $label = New-Object System.Windows.Forms.Label
-    $label.Text = "Smooth edges (FXAA)"
-    $label.SetBounds(16, $y + 3, 170, 22)
-    $form.Controls.Add($label)
-    $fxaaBox = New-Object System.Windows.Forms.ComboBox
-    $fxaaBox.DropDownStyle = "DropDownList"
-    foreach ($name in $fxaaNames) { [void]$fxaaBox.Items.Add($name) }
-    $fxaaBox.SetBounds(190, $y, 300, 26)
-    $fxaaNow = 0.65
-    [void][double]::TryParse((Setting "fxaa" "0.65"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$fxaaNow)
-    $best = 2
-    $bestDistance = 1000.0
-    for ($i = 0; $i -lt $fxaaValues.Count; $i++) {
-        $distance = [math]::Abs([double]::Parse($fxaaValues[$i], [System.Globalization.CultureInfo]::InvariantCulture) - $fxaaNow)
-        if ($distance -lt $bestDistance) { $best = $i; $bestDistance = $distance }
-    }
-    $fxaaBox.SelectedIndex = $best
-    $form.Controls.Add($fxaaBox)
-    $y += 32
-
-    $maskValues = @("0", "0.94", "0.97", "1", "1.05")
-    $maskNames = @("Off: the coloured corners show", "Tighter (0.94): if colour is still left at the edge", "Tight (0.97): if some colour is left at the edge", "On (1.0): black corners outside the lens circles", "Loose (1.05): if the picture's edge is cut off")
-    $label = New-Object System.Windows.Forms.Label
-    $label.Text = "Black corners (mask)"
-    $label.SetBounds(16, $y + 3, 170, 22)
-    $form.Controls.Add($label)
-    $maskBox = New-Object System.Windows.Forms.ComboBox
-    $maskBox.DropDownStyle = "DropDownList"
-    foreach ($name in $maskNames) { [void]$maskBox.Items.Add($name) }
-    $maskBox.SetBounds(190, $y, 300, 26)
-    $maskNow = 1.0
-    [void][double]::TryParse((Setting "mask" "1"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$maskNow)
-    $best = 3
-    $bestDistance = 1000.0
-    for ($i = 0; $i -lt $maskValues.Count; $i++) {
-        $distance = [math]::Abs([double]::Parse($maskValues[$i], [System.Globalization.CultureInfo]::InvariantCulture) - $maskNow)
-        if ($distance -lt $bestDistance) { $best = $i; $bestDistance = $distance }
-    }
-    $maskBox.SelectedIndex = $best
-    $form.Controls.Add($maskBox)
-    $y += 34
-
-    # Frame rate the game is held to.
-    $label = New-Object System.Windows.Forms.Label
-    $label.Text = "Frame rate"
-    $label.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
-    $label.SetBounds(16, $y, 520, 20)
-    $form.Controls.Add($label)
-    $y += 26
-    $targetValues = @("0", "30", "35", "40", "45", "50", "60")
-    $targetNames = @("Original timing (the game sets its own pace: slow in busy scenes)", "30 a second", "35 a second", "40 a second (steady at 80 Hz)", "45 a second (steady at 90 Hz)", "50 a second", "60 a second (recommended, steady at 120 Hz)")
-    $label = New-Object System.Windows.Forms.Label
-    $label.Text = "Aim for"
-    $label.SetBounds(16, $y + 3, 170, 22)
-    $form.Controls.Add($label)
-    $targetBox = New-Object System.Windows.Forms.ComboBox
-    $targetBox.DropDownStyle = "DropDownList"
-    foreach ($name in $targetNames) { [void]$targetBox.Items.Add($name) }
-    $targetBox.SetBounds(190, $y, 354, 26)
-    $targetNow = 60
-    [void][int]::TryParse((Setting "target_fps" "60"), [ref]$targetNow)
-    $best = 6
-    $bestDistance = 1000
-    for ($i = 0; $i -lt $targetValues.Count; $i++) {
-        $distance = [math]::Abs([int]$targetValues[$i] - $targetNow)
-        if ($distance -lt $bestDistance) { $best = $i; $bestDistance = $distance }
-    }
-    $targetBox.SelectedIndex = $best
-    $form.Controls.Add($targetBox)
-    $y += 28
-    $targetText = New-Object System.Windows.Forms.Label
-    $targetText.Text = "The emulator holds the game to this rate. 60 is the game's own and looks smoothest with Virtual Desktop's frame rate at 120 (Streaming tab); at 90 or 80 use 45 or 40. Lower is steadier on a slower PC."
-    $targetText.SetBounds(16, $y, 528, 40)
-    $form.Controls.Add($targetText)
-    $y += 46
-
-    $neo = New-Object System.Windows.Forms.CheckBox
-    $neo.Text = "PS4 Pro mode (sharper textures)"
-    $neo.Checked = Get-NeoMode
-    $neo.SetBounds(16, $y, 340, 24)
-    $form.Controls.Add($neo)
-    $y += 28
-
-    $again = New-Object System.Windows.Forms.CheckBox
-    $again.Text = "Show this window at every start"
-    $again.Checked = (Setting "menu" "1") -ne "0"
-    $again.SetBounds(16, $y, 300, 24)
-    $form.Controls.Add($again)
-
-    $play = New-Object System.Windows.Forms.Button
-    $play.Text = "Play"
-    $play.SetBounds(360, $y - 2, 88, 30)
-    $play.DialogResult = [System.Windows.Forms.DialogResult]::OK
-    $form.Controls.Add($play)
-    $form.AcceptButton = $play
-    $quit = New-Object System.Windows.Forms.Button
-    $quit.Text = "Quit"
-    $quit.SetBounds(456, $y - 2, 88, 30)
-    $quit.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
-    $form.Controls.Add($quit)
-    $form.CancelButton = $quit
-
-    $result = Show-Form $form
-    if ($result -ne [System.Windows.Forms.DialogResult]::OK) { return $false }
-    Save-Setting "runtime" ($runtimeKeys[$runtimeBox.SelectedIndex])
-    Save-Setting "eye_width" ($widths[$resolution.Value])
-    Save-Setting "aniso" ($anisoValues[$anisoBox.SelectedIndex])
-    Save-Setting "fxaa" ($fxaaValues[$fxaaBox.SelectedIndex])
-    Save-Setting "mask" ($maskValues[$maskBox.SelectedIndex])
-    Save-Setting "target_fps" ($targetValues[$targetBox.SelectedIndex])
-    Save-Setting "fov" ($fov.Value * 5)
-    Save-Setting "menu" ($(if ($again.Checked) { "1" } else { "0" }))
-    Set-NeoMode $neo.Checked
-    Read-Settings
-    return $true
-}
-
 # --- the window (the new look) ----------------------------------------------------------------
 function Read-Number([string]$key, [double]$default) {
     $number = 0.0
@@ -1657,7 +1384,7 @@ function Show-MenuModern {
 
         [RushUi.Theme]::DarkTitleBar($form)
     } catch {
-        Say ("The new window could not be built (" + $_.Exception.Message + "); the plain window is used.") "Yellow"
+        $script:windowError = $_.Exception.Message
         return
     }
 
@@ -1686,10 +1413,13 @@ function Show-Menu {
     if ($script:modernUi) {
         $script:menuOutcome = "plain"
         $null = Show-MenuModern
-        if ($script:menuOutcome -eq "play") { return $true }
         if ($script:menuOutcome -eq "quit") { return $false }
+        if ($script:menuOutcome -eq "play") { return $true }
     }
-    return (Show-MenuClassic)
+    # The window could not be built: say why, and start the game with the saved settings.
+    $why = $(if ($script:windowError) { $script:windowError } else { "unknown" })
+    [void](Show-Box ("The settings window could not be built:`n`n" + $why + "`n`nThe game starts with the settings saved in settings.txt.") "OK" "Warning")
+    return $true
 }
 
 $emulator = Join-Path $here "shadps4.exe"

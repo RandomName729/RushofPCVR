@@ -16,6 +16,9 @@ as PlayStation Move wands), which is separate. The emulator itself is that of 0.
   edition, which has the emulator support for them (`controllers`, `move_pitch`, `move_reach` and
   `move_turn` in `settings.txt`).
 - Disabled switches, sliders and buttons in the window now look disabled.
+- **No second, plain window.** The launcher used to fall back to an older, plain settings window
+  when the new one could not be built. That backup is gone: if the window cannot be built, a
+  message says why and the game starts with the saved settings.
 
 ## 0.3.0 - 2026-10-17
 
