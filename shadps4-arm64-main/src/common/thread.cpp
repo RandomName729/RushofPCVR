@@ -3,7 +3,10 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cstdlib>
 #include <ctime>
+#include <vector>
 #include <string>
 #include <thread>
 
@@ -108,17 +111,57 @@ void SetCurrentThreadPriority(ThreadPriority new_priority) {
     SetThreadPriority(handle, windows_priority);
 }
 
+namespace {
+
+// One waitable timer a thread, kept for as long as the thread lives. A high-resolution timer
+// (Windows 10 1803 and later) wakes the thread within a fraction of a millisecond; the ordinary
+// kind only on the next tick of the system clock, which is up to 15.6 ms away unless something
+// has asked for a finer one. Sleeps of a few milliseconds, as the headset refresh makes them,
+// are what that ruins.
+struct SleepTimer {
+    HANDLE handle{};
+    bool high_resolution{};
+
+    SleepTimer() {
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+        handle = ::CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                          TIMER_ALL_ACCESS);
+        high_resolution = handle != nullptr;
+        if (handle == nullptr) {
+            handle = ::CreateWaitableTimerW(nullptr, TRUE, nullptr);
+        }
+    }
+    ~SleepTimer() {
+        if (handle != nullptr) {
+            ::CloseHandle(handle);
+        }
+    }
+    SleepTimer(const SleepTimer&) = delete;
+    SleepTimer& operator=(const SleepTimer&) = delete;
+};
+
+} // namespace
+
 bool AccurateSleep(const std::chrono::nanoseconds duration, std::chrono::nanoseconds* remaining,
                    const bool interruptible) {
     const auto begin_sleep = std::chrono::high_resolution_clock::now();
 
-    LARGE_INTEGER interval{
-        .QuadPart = -1 * (duration.count() / 100u),
-    };
-    HANDLE timer = ::CreateWaitableTimer(NULL, TRUE, NULL);
-    SetWaitableTimer(timer, &interval, 0, NULL, NULL, 0);
-    const auto ret = WaitForSingleObjectEx(timer, INFINITE, interruptible);
-    ::CloseHandle(timer);
+    thread_local SleepTimer sleep_timer;
+    DWORD ret = WAIT_FAILED;
+    if (sleep_timer.handle != nullptr) {
+        LARGE_INTEGER interval{
+            .QuadPart = -1 * std::max<s64>(duration.count() / 100, 1),
+        };
+        // (Setting the timer again also clears it if an earlier sleep was cut short.)
+        if (::SetWaitableTimer(sleep_timer.handle, &interval, 0, nullptr, nullptr, FALSE)) {
+            ret = WaitForSingleObjectEx(sleep_timer.handle, INFINITE, interruptible);
+            if (ret != WAIT_OBJECT_0) {
+                ::CancelWaitableTimer(sleep_timer.handle);
+            }
+        }
+    }
 
     if (remaining) {
         const auto end_sleep = std::chrono::high_resolution_clock::now();
@@ -126,6 +169,95 @@ bool AccurateSleep(const std::chrono::nanoseconds duration, std::chrono::nanosec
         *remaining = duration > sleep_time ? duration - sleep_time : std::chrono::nanoseconds(0);
     }
     return ret == WAIT_OBJECT_0;
+}
+
+namespace {
+using NtSetTimerResolutionFn = LONG(NTAPI*)(ULONG, BOOLEAN, PULONG);
+}
+
+void TuneHostForGame() {
+    const char* no_tuning = std::getenv("SHADPS4_NO_HOST_TUNING");
+    if (no_tuning != nullptr && no_tuning[0] == '1') {
+        LOG_INFO(Common, "Host tuning is off (SHADPS4_NO_HOST_TUNING)");
+        return;
+    }
+
+    // The system clock ticks every 0.5 ms (as fine as it goes) instead of every 15.6 ms.
+    // Since Windows 11 the setting of one process no longer applies to the others, and one
+    // that is not in front may be ignored, so what follows asks to be left alone as well.
+    ULONG resolution = 0;
+    if (const auto ntdll = ::GetModuleHandleW(L"ntdll.dll")) {
+        if (const auto set = reinterpret_cast<NtSetTimerResolutionFn>(
+                ::GetProcAddress(ntdll, "NtSetTimerResolution"))) {
+            set(5000, TRUE, &resolution);
+        }
+    }
+
+    // No power saving for the process: it is not put on slow cores or have its timers
+    // stretched when the machine thinks it is in the background.
+#ifndef PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION
+#define PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION 0x4
+#endif
+    PROCESS_POWER_THROTTLING_STATE throttling{};
+    throttling.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+    throttling.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED |
+                             PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+    throttling.StateMask = 0;
+    const bool throttling_off = ::SetProcessInformation(::GetCurrentProcess(),
+                                                        ProcessPowerThrottling, &throttling,
+                                                        sizeof(throttling)) != 0;
+
+    // On a processor with fast and slow cores, the title's threads stay on the fast ones: a
+    // thread the system leaves on an efficiency core takes half as long again for the same work,
+    // and the title's main thread is what a frame waits for. (SHADPS4_ALL_CORES=1 keeps all.)
+    u32 fast_cores = 0;
+    u32 all_cores = 0;
+    const char* all = std::getenv("SHADPS4_ALL_CORES");
+    if (all == nullptr || all[0] != '1') {
+        ULONG size = 0;
+        ::GetSystemCpuSetInformation(nullptr, 0, &size, ::GetCurrentProcess(), 0);
+        if (size != 0) {
+            std::vector<u8> buffer(size);
+            if (::GetSystemCpuSetInformation(
+                    reinterpret_cast<PSYSTEM_CPU_SET_INFORMATION>(buffer.data()), size, &size,
+                    ::GetCurrentProcess(), 0)) {
+                BYTE best = 0;
+                for (ULONG off = 0; off < size;) {
+                    const auto* info =
+                        reinterpret_cast<const SYSTEM_CPU_SET_INFORMATION*>(buffer.data() + off);
+                    if (info->Type == CpuSetInformation) {
+                        best = std::max(best, info->CpuSet.EfficiencyClass);
+                    }
+                    off += info->Size;
+                }
+                std::vector<ULONG> ids;
+                for (ULONG off = 0; off < size;) {
+                    const auto* info =
+                        reinterpret_cast<const SYSTEM_CPU_SET_INFORMATION*>(buffer.data() + off);
+                    if (info->Type == CpuSetInformation) {
+                        ++all_cores;
+                        if (info->CpuSet.EfficiencyClass == best) {
+                            ids.push_back(info->CpuSet.Id);
+                        }
+                    }
+                    off += info->Size;
+                }
+                // (Only where the cores differ, and where enough remain for the title.)
+                if (!ids.empty() && ids.size() < all_cores && ids.size() >= 8) {
+                    if (::SetProcessDefaultCpuSets(::GetCurrentProcess(), ids.data(),
+                                                   static_cast<ULONG>(ids.size()))) {
+                        fast_cores = static_cast<u32>(ids.size());
+                    }
+                }
+            }
+        }
+    }
+
+    LOG_INFO(Common,
+             "Host tuning: system clock {:.2f} ms, power throttling {}, {} of {} logical "
+             "processors used",
+             resolution / 10000.0, throttling_off ? "off" : "unchanged",
+             fast_cores != 0 ? fast_cores : all_cores, all_cores);
 }
 
 #else
@@ -167,6 +299,8 @@ bool AccurateSleep(const std::chrono::nanoseconds duration, std::chrono::nanosec
     }
     return ret == 0 || errno != EINTR;
 }
+
+void TuneHostForGame() {}
 
 #endif
 

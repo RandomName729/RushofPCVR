@@ -3,7 +3,7 @@
 
 #version 450
 
-layout (location = 0) in vec2 uv;
+layout (location = 0) in vec2 uv_in;
 layout (location = 0) out vec4 color;
 
 layout (binding = 0) uniform sampler2D texSampler;
@@ -23,6 +23,12 @@ layout (push_constant) uniform settings {
     float mask;
     // Above 0, edges are smoothed (an edge-following blur, as FXAA does): up to 1, the stronger.
     float fxaa;
+    // The part of the picture that is shown, in picture units: x and y of its top left corner,
+    // then its width and height (0, 0, 1, 1: all of it).
+    float crop_x;
+    float crop_y;
+    float crop_w;
+    float crop_h;
 } pp;
 
 const float cutoff = 0.0031308, a = 1.055, b = 0.055, d = 12.92;
@@ -73,6 +79,7 @@ vec3 smoothed(vec2 at, vec3 centre) {
 }
 
 void main() {
+    vec2 uv = vec2(pp.crop_x, pp.crop_y) + uv_in * vec2(pp.crop_w, pp.crop_h);
     vec4 color_linear = texture(texSampler, uv);
     vec3 here = pp.hdr ? color_linear.rgb : gamma(color_linear.rgb);
     if (pp.fxaa > 0.0) {

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <map>
+#include <string>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -19,9 +20,16 @@
 #include "common/debug.h"
 #include "common/logging/log.h"
 #include "common/thread.h"
+#include "core/guest_cpu/guest_wait_trace.h"
 #include "imgui/renderer/texture_manager.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+
+namespace Libraries::Kernel {
+std::string EqueueWaitReport(double seconds);
+void EqueueTraceNote(const std::string& what);
+void GuestCodeProbe();
+}
 
 namespace Vulkan {
 
@@ -278,6 +286,7 @@ void FrameStats::GuestSubmit() {
     if (!Enabled()) {
         return;
     }
+    Libraries::Kernel::EqueueTraceNote("guest submit");
     s64 expected = 0;
     g_stage_times.guest_submit.compare_exchange_strong(
         expected, std::chrono::steady_clock::now().time_since_epoch().count());
@@ -439,6 +448,11 @@ void FrameStats::EndFrame() {
         }
     }
     LogThreadCpuUsage(seconds);
+    Libraries::Kernel::GuestCodeProbe();
+    LOG_INFO(Render_Vulkan, "where the game's threads were blocked in the last {:.0f} s:\n{}",
+             seconds, Core::GuestCpu::GuestWaitTable::Instance().TopSites(seconds));
+    LOG_INFO(Render_Vulkan, "event queues in the last {:.0f} s:\n{}", seconds,
+             Libraries::Kernel::EqueueWaitReport(seconds));
     c.frames = 0;
     c.since = now;
 }

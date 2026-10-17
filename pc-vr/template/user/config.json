@@ -48,7 +48,7 @@
                     "install_dirs":  [
 
                                      ],
-                    "neo_mode":  false,
+                    "neo_mode":  true,
                     "shad_net_enabled":  false,
                     "shadnet_server":  "",
                     "show_fps_counter":  false,

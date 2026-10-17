@@ -5,6 +5,8 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <set>
+#include <tuple>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -43,6 +45,15 @@
 #ifdef MemoryBarrier
 #undef MemoryBarrier
 #endif
+
+namespace VideoCore {
+bool TexAuditMip0Empty(VAddr addr); // texture_cache.cpp (SHADPS4_DBG_TEX_AUDIT)
+void TexAuditNoteWrite(u64 dst, u64 bytes, u64 src, bool is_copy);
+void StageGuardOnCopy(u64 src, u64 bytes, u64 dst);
+void TexAuditCopyPre(u64 src, u64 bytes, u64 dst);
+u32 TexFirstGoodMip(u64 address, u32 width, u32 height, u32 levels, u32 data_format);
+void TexAuditSampleCheck(u64 tex_addr, u32 base_level, u32 last_level, u32 eff_min_lod);
+}
 
 namespace Vulkan {
 
@@ -642,15 +653,111 @@ void Rasterizer::DispatchDirect() {
             }
             const u64 groups = u64{cs_program.dim_x} * cs_program.dim_y * cs_program.dim_z;
             const u64 bytes = std::min<u64>({groups * 1024, src_size, dst_size}) & ~u64{15};
+            {
+                // SHADPS4_DBG_TEX_AUDIT: exact V# words, user data and code of the copy kernel
+                // (stride, swizzle, add_tid and any hidden offset would change where bytes land).
+                static const bool copy_audit = std::getenv("SHADPS4_DBG_TEX_AUDIT") != nullptr;
+                static std::atomic<u32> copy_count{0};
+                static std::atomic<u32> overlap_count{0};
+                if (copy_audit) {
+                    const u32 k = copy_count.fetch_add(1) + 1;
+                    if (k == 1) {
+                        std::string code, ud;
+                        const auto* words = reinterpret_cast<const u32*>(cs.pgm_base);
+                        for (u32 i = 0; i < 24; ++i) {
+                            code += fmt::format(" {:08x}", words[i]);
+                        }
+                        for (u32 i = 0; i < cs.user_data.size() && i < 16; ++i) {
+                            ud += fmt::format(" {:08x}", cs.user_data[i]);
+                        }
+                        LOG_WARNING(Render_Vulkan,
+                                    "TEXAUDIT: COPYKERNEL code at {:#x}:{}  user_data:{}",
+                                    static_cast<u64>(cs.pgm_base), code, ud);
+                    }
+                    if (k <= 40) {
+                        std::string desc_text;
+                        for (const auto& desc : cs.buffers) {
+                            const auto vsharp = desc.GetSharp(cs);
+                            u32 raw[4];
+                            std::memcpy(raw, &vsharp, sizeof(raw));
+                            desc_text += fmt::format(
+                                " [{} V#={:08x} {:08x} {:08x} {:08x} base={:#x} stride={} "
+                                "records={} swz={} add_tid={} index_stride={}]",
+                                desc.is_written ? "DST" : "SRC", raw[0], raw[1], raw[2], raw[3],
+                                static_cast<u64>(vsharp.base_address),
+                                static_cast<u32>(vsharp.GetStride()),
+                                static_cast<u32>(vsharp.num_records),
+                                static_cast<u32>(vsharp.swizzle_enable),
+                                static_cast<u32>(vsharp.add_tid_enable),
+                                static_cast<u32>(vsharp.index_stride));
+                        }
+                        LOG_WARNING(Render_Vulkan, "TEXAUDIT: COPYKERNEL #{} groups={}{}", k,
+                                    groups, desc_text);
+                    }
+                    if (src != 0 && dst != 0 && dst < src + std::min<u64>(groups * 1024, src_size) &&
+                        src < dst + std::min<u64>(groups * 1024, dst_size)) {
+                        const u32 o = overlap_count.fetch_add(1) + 1;
+                        if (o <= 30 || (o % 100) == 0) {
+                            LOG_WARNING(Render_Vulkan,
+                                        "TEXAUDIT: COPYKERNEL OVERLAP #{}: src={:#x}+{:#x} "
+                                        "dst={:#x}+{:#x} shift={}{:#x} (of {} copies)",
+                                        o, src, std::min<u64>(groups * 1024, src_size), dst,
+                                        std::min<u64>(groups * 1024, dst_size),
+                                        dst >= src ? "+" : "-", dst >= src ? dst - src : src - dst,
+                                        k);
+                        }
+                    }
+                }
+            }
             if (src != 0 && dst != 0 && bytes != 0) {
+                VideoCore::TexAuditCopyPre(src, bytes, dst);
                 std::memmove(reinterpret_cast<void*>(dst), reinterpret_cast<const void*>(src),
                              bytes);
+                VideoCore::TexAuditNoteWrite(dst, bytes, src, true);
+                VideoCore::StageGuardOnCopy(src, bytes, dst);
                 InvalidateMemory(dst, bytes);
                 return;
+            }
+            static std::atomic<u32> fallthrough{0};
+            if (std::getenv("SHADPS4_DBG_TEX_AUDIT") != nullptr && fallthrough.fetch_add(1) < 40) {
+                LOG_WARNING(Render_Vulkan,
+                            "TEXAUDIT: copy kernel NOT done by the HLE: src={:#x} dst={:#x} "
+                            "bytes={:#x}",
+                            src, dst, bytes);
             }
         }
     }
 
+    {
+        // SHADPS4_DBG_TEX_AUDIT: which compute shaders (other than the HLE'd copy kernel) write
+        // into the streamed asset pool that holds the textures?
+        static const bool audit = std::getenv("SHADPS4_DBG_TEX_AUDIT") != nullptr;
+        static std::set<std::pair<u64, u64>> audit_seen;
+        static u32 audit_logged = 0;
+        if (audit && audit_logged < 200) {
+            constexpr u64 pool_begin = 0x100f200000ULL;
+            constexpr u64 pool_end = pool_begin + 0x7b6d0000ULL;
+            for (const auto& desc : cs.buffers) {
+                if (!desc.is_written) {
+                    continue;
+                }
+                const auto vsharp = desc.GetSharp(cs);
+                const u64 base = vsharp.base_address;
+                const u64 size = vsharp.GetSize();
+                if (audit_seen.emplace(static_cast<u64>(cs.pgm_hash), base).second) {
+                    ++audit_logged;
+                    LOG_WARNING(Render_Vulkan,
+                                "TEXAUDIT: CS-WRITE shader {:#x} ({}x{}x{} groups) writes buffer "
+                                "{:#x}+{:#x}{}",
+                                static_cast<u64>(cs.pgm_hash), cs_program.dim_x, cs_program.dim_y,
+                                cs_program.dim_z, base, size,
+                                (base < pool_end && base + size > pool_begin)
+                                    ? " IN THE TEXTURE POOL"
+                                    : "");
+                }
+            }
+        }
+    }
     if (!BindResources(pipeline)) {
         if (trace) {
             LOG_INFO(Render_Vulkan, "TRACE   dispatch dropped by BindResources");
@@ -689,6 +796,30 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     if (DebugSkipComputeShader(
             static_cast<u64>(pipeline->GetStage(Shader::LogicalStage::Compute).pgm_hash))) {
         return;
+    }
+
+    {
+        // SHADPS4_DBG_TEX_AUDIT: indirect dispatches are not handled by the copy HLE; which
+        // shaders come this way and what do they write?
+        static const bool audit = std::getenv("SHADPS4_DBG_TEX_AUDIT") != nullptr;
+        static std::atomic<u32> indirect_count{0};
+        if (audit) {
+            const u32 n = indirect_count.fetch_add(1) + 1;
+            if (n <= 60 || (n % 500) == 0) {
+                const auto& cs = pipeline->GetStage(Shader::LogicalStage::Compute);
+                std::string bufs;
+                for (const auto& desc : cs.buffers) {
+                    const auto vsharp = desc.GetSharp(cs);
+                    bufs += fmt::format(" [{}{:#x}+{:#x}]", desc.is_written ? "W " : "R ",
+                                        static_cast<u64>(vsharp.base_address),
+                                        static_cast<u64>(vsharp.GetSize()));
+                }
+                LOG_WARNING(Render_Vulkan,
+                            "TEXAUDIT: INDIRECT dispatch #{} shader {:#x} args at {:#x}+{:#x}:{}",
+                            n, static_cast<u64>(cs.pgm_hash), static_cast<u64>(address),
+                            static_cast<u64>(offset), bufs);
+            }
+        }
     }
 
     if (!BindResources(pipeline)) {
@@ -1215,6 +1346,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
     // This is currently always 1 for anything other than mip fallback arrays.
     boost::container::small_vector<u32, 8> image_descriptor_array_sizes;
 
+    static const bool no_view_min_lod = std::getenv("SHADPS4_NO_VIEW_MIN_LOD") != nullptr;
     for (const auto& image_desc : stage.images) {
         const auto tsharp = image_desc.GetSharp(stage);
         if (texture_cache.IsMeta(tsharp.Address())) {
@@ -1241,6 +1373,36 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             } else if (mip_fallback_mode == Shader::MipStorageFallbackMode::DynamicIndex) {
                 desc.view_info.range.base.level += i;
                 desc.view_info.range.extent.levels = 1;
+            }
+
+            if (mip_fallback_mode == Shader::MipStorageFallbackMode::None && !image_desc.is_written &&
+                tsharp.base_level == 0 && tsharp.last_level > 0 &&
+                desc.view_info.range.base.level == 0) {
+                // Top mips that are not resident hold other data. The image view starts at the
+                // first usable mip (per image: a sampler can be shared by several textures, so
+                // a sampler side clamp would hit the wrong ones). T# min_lod is the game's own
+                // statement, the content check finds the rest. LOD is relative to the view.
+                const u32 levels_all = static_cast<u32>(tsharp.last_level) + 1;
+                u32 first = static_cast<u32>(tsharp.min_lod) >> 8;
+                if (!no_view_min_lod) {
+                    first = std::max(first, VideoCore::TexFirstGoodMip(
+                                                tsharp.Address(),
+                                                static_cast<u32>(tsharp.width) + 1,
+                                                static_cast<u32>(tsharp.height) + 1, levels_all,
+                                                static_cast<u32>(tsharp.GetDataFmt())));
+                }
+                first = std::min(first, levels_all - 1);
+                if (first != 0) {
+                    static std::atomic<u32> view_clamped{0};
+                    if (view_clamped.fetch_add(1) % 4000 == 0) {
+                        LOG_WARNING(Render_Vulkan,
+                                    "view min LOD: {} image binds start at a higher mip so far "
+                                    "(latest {:#x}: starts at mip {} of {})",
+                                    view_clamped.load(), tsharp.Address(), first, levels_all);
+                    }
+                    desc.view_info.range.base.level = first;
+                    desc.view_info.range.extent.levels = levels_all - first;
+                }
             }
 
             image_id = texture_cache.FindImage(desc);
@@ -1395,10 +1557,145 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 
     for (const auto& sampler : stage.samplers) {
         auto ssharp = sampler.GetSharp(stage);
+        {
+            // The image resource (T#) has its own MIN_LOD (4.8 fixed point) that clamps the LOD of
+            // every sample taken through it: titles that stream mips in (Rush of Blood) keep the
+            // not yet resident top mips out of reach this way while their memory holds other data.
+            // Only the sampler's (S#) value was used, so close-up surfaces read the garbage mips.
+            // SHADPS4_NO_TSHARP_MIN_LOD=1 turns the clamp off.
+            // Done per image view now (see the image pass); the sampler side is only for comparison.
+            static const bool no_tsharp_min_lod = std::getenv("SHADPS4_SAMPLER_SIDE_MIN_LOD") == nullptr;
+            if (!no_tsharp_min_lod &&
+                static_cast<size_t>(sampler.associated_image) < stage.images.size()) {
+                const auto& timg = stage.images[sampler.associated_image].GetSharp(stage);
+                const u32 tmin = static_cast<u32>(timg.min_lod);
+                static std::atomic<u32> tmin_seen{0}, tmin_applied{0};
+                static std::atomic<u32> tmin_logged{0};
+                ++tmin_seen;
+                if (tmin != 0 && tmin > static_cast<u32>(ssharp.min_lod.Value())) {
+                    ++tmin_applied;
+                    if (tmin_logged.fetch_add(1) < 40) {
+                        LOG_WARNING(Render_Vulkan,
+                                    "T# MIN_LOD applied: texture {:#x} levels {}..{} T# min_lod "
+                                    "{:.2f} (S# min_lod {:.2f}), {} of {} sampler binds so far",
+                                    timg.Address(), static_cast<u32>(timg.base_level),
+                                    static_cast<u32>(timg.last_level),
+                                    static_cast<float>(tmin) / 256.0f, ssharp.MinLod(),
+                                    tmin_applied.load(), tmin_seen.load());
+                    }
+                    ssharp.min_lod.Assign(tmin);
+                }
+            }
+        }
+        {
+            // The game streams texture mips for the console's 1152-pixel-wide eye. With
+            // SHADPS4_ROB_EYE_WIDTH larger than that the pixel derivatives are finer, the GPU picks
+            // sharper mips than the game made resident and samples the garbage in the
+            // non-resident ones. SHADPS4_TEX_LOD_BIAS=<log2(eye_width/1152)> (e.g. 0.83 for 2048)
+            // adds that to the LOD of every mip-mapped texture so the choice matches the console.
+            static const float lod_extra = [] {
+                const char* v = std::getenv("SHADPS4_TEX_LOD_BIAS");
+                const float f = v != nullptr ? static_cast<float>(std::atof(v)) : 0.0f;
+                if (f != 0.0f) {
+                    LOG_WARNING(Render_Vulkan, "SHADPS4_TEX_LOD_BIAS: adding {:.2f} to the LOD of "
+                                               "mip-mapped textures",
+                                f);
+                }
+                return f;
+            }();
+            if (lod_extra != 0.0f &&
+                static_cast<size_t>(sampler.associated_image) < stage.images.size()) {
+                const auto& timg = stage.images[sampler.associated_image].GetSharp(stage);
+                if (timg.last_level > timg.base_level) {
+                    const s32 cur = static_cast<s16>((ssharp.lod_bias.Value() ^ 0x2000u) - 0x2000u);
+                    const s32 sum = std::clamp(cur + static_cast<s32>(lod_extra * 256.0f), -8192,
+                                               8191);
+                    ssharp.lod_bias.Assign(static_cast<u64>(sum) & 0x3fffu);
+                }
+            }
+        }
+        {
+            // Diagnostic: SHADPS4_FORCE_MIN_LOD=<levels> forces the min LOD of every mip-mapped
+            // texture, to tell garbage in the top mips from wrong texture contents.
+            static const u32 force_min = [] {
+                const char* v = std::getenv("SHADPS4_FORCE_MIN_LOD");
+                const u32 f = v != nullptr ? static_cast<u32>(std::atof(v) * 256.0) : 0;
+                if (f != 0) {
+                    LOG_WARNING(Render_Vulkan, "SHADPS4_FORCE_MIN_LOD: min LOD forced to {:.2f}",
+                                static_cast<float>(f) / 256.0f);
+                }
+                return f;
+            }();
+            if (force_min != 0 &&
+                static_cast<size_t>(sampler.associated_image) < stage.images.size()) {
+                const auto& timg = stage.images[sampler.associated_image].GetSharp(stage);
+                if (timg.last_level > timg.base_level && force_min > ssharp.min_lod.Value()) {
+                    ssharp.min_lod.Assign(force_min);
+                }
+            }
+        }
+        if (static_cast<size_t>(sampler.associated_image) < stage.images.size()) {
+            // The mip chain's own contents say which top mips are not resident (garbage).
+            const auto& timg = stage.images[sampler.associated_image].GetSharp(stage);
+            static const bool sampler_side_content =
+                std::getenv("SHADPS4_SAMPLER_SIDE_MIN_LOD") != nullptr;
+            if (sampler_side_content && timg.base_level == 0 && timg.last_level > 0) {
+                const u32 fg = VideoCore::TexFirstGoodMip(
+                    timg.Address(), static_cast<u32>(timg.width) + 1, static_cast<u32>(timg.height) + 1,
+                    static_cast<u32>(timg.last_level) + 1, static_cast<u32>(timg.GetDataFmt()));
+                if (fg != 0 && (fg << 8) > static_cast<u32>(ssharp.min_lod.Value())) {
+                    static std::atomic<u32> content_clamped{0};
+                    if (content_clamped.fetch_add(1) % 2000 == 0) {
+                        LOG_WARNING(Render_Vulkan,
+                                    "CONTENT_MIN_LOD: {} sampler binds clamped so far (latest: {:#x} "
+                                    "first good mip {})",
+                                    content_clamped.load(), timg.Address(), fg);
+                    }
+                    ssharp.min_lod.Assign(std::min<u32>(fg, 15) << 8);
+                }
+            }
+        }
+        {
+            static const bool audit_sc = std::getenv("SHADPS4_DBG_TEX_AUDIT") != nullptr;
+            if (audit_sc && static_cast<size_t>(sampler.associated_image) < stage.images.size()) {
+                const auto& timg = stage.images[sampler.associated_image].GetSharp(stage);
+                const u32 eff = std::max<u32>(static_cast<u32>(timg.min_lod),
+                                              static_cast<u32>(ssharp.min_lod.Value()));
+                VideoCore::TexAuditSampleCheck(timg.Address(), static_cast<u32>(timg.base_level),
+                                               static_cast<u32>(timg.last_level), eff >> 8);
+            }
+        }
         if (sampler.disable_aniso) {
             const auto& tsharp = stage.images[sampler.associated_image].GetSharp(stage);
             if (tsharp.base_level == 0 && tsharp.last_level == 0) {
                 ssharp.max_aniso.Assign(AmdGpu::AnisoRatio::One);
+            }
+        }
+        {
+            // SHADPS4_DBG_TEX_AUDIT: which LOD limits does a draw use with a texture whose top mip
+            // is still empty?
+            static const bool audit = std::getenv("SHADPS4_DBG_TEX_AUDIT") != nullptr;
+            static std::set<std::tuple<u64, u32, u32, u32, u32>> audit_seen;
+            static u32 audit_logged = 0;
+            if (audit && audit_logged < 300 &&
+                static_cast<size_t>(sampler.associated_image) < stage.images.size()) {
+                const auto& tsharp = stage.images[sampler.associated_image].GetSharp(stage);
+                const u64 taddr = tsharp.Address();
+                const u32 tbase = static_cast<u32>(tsharp.base_level);
+                const u32 tlast = static_cast<u32>(tsharp.last_level);
+                const u32 smin = static_cast<u32>(ssharp.MinLod() * 256.0f);
+                const u32 smax = static_cast<u32>(ssharp.MaxLod() * 256.0f);
+                if (VideoCore::TexAuditMip0Empty(taddr) &&
+                    audit_seen.emplace(taddr, tbase, tlast, smin, smax).second) {
+                    ++audit_logged;
+                    LOG_WARNING(Render_Vulkan,
+                                "TEXAUDIT: SAMPLER texture {:#x} (top mip empty): T# levels "
+                                "{}..{}, S# min_lod {:.2f} max_lod {:.2f} lod_bias {:.2f} "
+                                "mip_filter {} aniso_off {}",
+                                taddr, tbase, tlast, ssharp.MinLod(), ssharp.MaxLod(),
+                                ssharp.LodBias(), static_cast<u32>(ssharp.mip_filter.Value()),
+                                static_cast<bool>(sampler.disable_aniso));
+                }
             }
         }
         const auto vk_sampler = texture_cache.GetSampler(ssharp, liverpool->regs.ta_bc_base);

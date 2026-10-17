@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include "common/assert.h"
 #include "common/bit_field.h"
@@ -341,7 +343,15 @@ static u64 GetGpuClock64() {
     auto now = std::chrono::high_resolution_clock::now();
     auto duration = now.time_since_epoch();
     auto ticks = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
-    return static_cast<u64>(ticks);
+    // The console's GPU timestamp (EOP data_sel 3) ticks at 100 MHz (10 ns). Games that time their
+    // frames with it (Rush of Blood writes pairs every frame) see ten times too long frames when
+    // it counts nanoseconds. SHADPS4_GPU_CLOCK_DIV=<n> divides the nanosecond count (10 = 100 MHz).
+    static const u64 divisor = [] {
+        const char* v = std::getenv("SHADPS4_GPU_CLOCK_DIV");
+        const long long d = v != nullptr ? std::atoll(v) : 1;
+        return static_cast<u64>(d > 0 ? d : 1);
+    }();
+    return static_cast<u64>(ticks) / divisor;
 }
 
 static u64 GetGpuPerfCounter() {

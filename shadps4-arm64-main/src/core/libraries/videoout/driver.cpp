@@ -577,13 +577,28 @@ public:
     HeadsetRefreshClock(std::chrono::nanoseconds period_, u32 looks_per_refresh_)
         : period{period_}, looks_per_refresh{looks_per_refresh_} {}
 
-    /// `halves` is how many half refreshes of the display (or of the rate the headset was
-    /// made with, where there is no display to follow) one refresh of the headset lasts: two
-    /// for a headset that refreshes when the display does, three for one that takes one and
-    /// a half times as long, so that a title drawing a frame for every two of the headset's
-    /// refreshes draws one for every three of the display's.
-    bool IsRefresh(Clock::time_point now, u32 halves) {
-        halves = std::max(halves, 1u);
+    /// `eighths` is how many eighths of a refresh of the display (or of the rate the headset
+    /// was made with, where there is no display to follow) one refresh of the headset lasts:
+    /// eight for a headset that refreshes when the display does, twelve for one that takes one
+    /// and a half times as long, so that a title drawing a frame for every two of the
+    /// headset's refreshes draws one for every three of the display's.
+    bool IsRefresh(Clock::time_point now, u32 eighths) {
+        eighths = std::max(eighths, 1u);
+        if (fixed_period.count() > 0) {
+            // A clock of its own, not in step with the display: the refreshes the title was
+            // made for (SHADPS4_VR_EVENT_US).
+            if (due == Clock::time_point{}) {
+                due = now;
+            }
+            if (now < due) {
+                return false;
+            }
+            due += fixed_period;
+            if (due <= now) {
+                due = now + fixed_period;
+            }
+            return true;
+        }
         const auto display = Core::Vr::Runtime::Instance().GetDisplayRefresh();
         // A host that misses a few refreshes of its display is still followed: the display
         // went on refreshing. One that says nothing for longer has stopped showing pictures.
@@ -594,7 +609,7 @@ public:
                 LOG_INFO(Lib_VideoOut, "The host's display is silent: the headset refreshes by "
                                        "the clock again");
             }
-            if (++look < looks_per_refresh * halves / 2) {
+            if (++look < looks_per_refresh * eighths / 8) {
                 return false;
             }
             look = 0;
@@ -618,15 +633,38 @@ public:
         // refreshes at the latest of them once its refresh has lasted its time.
         const auto anchor = display.time + delay;
         const s64 behind = (now - anchor).count();
-        const s64 length = host_period.count() / 2;
+        // (Refreshes of a whole number of half refreshes are put on the grid of half
+        // refreshes, as they always were; shorter ones, a diagnostic, on that of eighths.)
+        const s64 length = host_period.count() / (eighths % 4 == 0 ? 2 : 8);
+        const s64 units = eighths % 4 == 0 ? eighths / 4 : eighths;
         const s64 steps = behind >= 0 ? behind / length : -((-behind + length - 1) / length);
         const auto instant = anchor + std::chrono::nanoseconds{steps * length};
-        if ((instant - last_refresh).count() < length * halves - length / 2) {
+        if (eighths % 4 != 0) {
+            if (due == Clock::time_point{}) {
+                due = instant;
+            }
+            if (instant < due) {
+                return false;
+            }
+            due += std::chrono::nanoseconds{length * units};
+            if (due <= instant) {
+                due = instant + std::chrono::nanoseconds{length * units};
+            }
+            last_refresh = instant;
+            Report(now, display.rate);
+            return true;
+        }
+        if ((instant - last_refresh).count() < length * units - length / 2) {
             return false;
         }
         last_refresh = instant;
         Report(now, display.rate);
         return true;
+    }
+
+    /// Refreshes every `period` by the clock, whatever the display does.
+    void SetFixedPeriod(std::chrono::nanoseconds period) {
+        fixed_period = period;
     }
 
     /// A frame was handed to the host just now; `refreshes` is how many of the display's the
@@ -702,6 +740,8 @@ private:
     std::chrono::nanoseconds host_period{};
     std::chrono::nanoseconds delay{};
     Clock::time_point last_refresh;
+    Clock::time_point due;
+    std::chrono::nanoseconds fixed_period{};
     Clock::time_point last_delivery;
     Clock::time_point report_time;
     u32 deliveries{};
@@ -721,6 +761,8 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
     Common::SetCurrentThreadName("shadPS4:PresentThread");
     Common::SetCurrentThreadRealtime(vblank_period);
+    // It sleeps for most of the time and must wake on time when it does not.
+    Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
 
     // A frame for the headset is flipped as soon as the GPU has finished drawing it instead of
     // at the next refresh. The host shows it when its own display is due anyway, and the title
@@ -735,7 +777,50 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         vr.IsHeadsetConnected() && !(early_setting != nullptr && early_setting[0] == '0');
     HeadsetRefreshClock refresh_clock{vblank_period, LooksPerRefresh};
 
-    Common::AccurateTimer timer{early_flips ? vblank_period / LooksPerRefresh : vblank_period};
+    // DIAGNOSTIC / TEST: SHADPS4_VR_EVENT_US=<microseconds> refreshes the emulated headset by
+    // its own clock every that long (8333 is the 120 Hz the title was made for).
+    // SHADPS4_VR_TARGET_FPS=<n> (20 to 60) makes the period follow what the title's frames take:
+    // a frame takes the title about 2.5 periods plus its own work, so the period is moved until
+    // frames come at that rate (60 is two refreshes of a 120 Hz display, 45 of a 90 Hz one and 40 of
+    // an 80 Hz one, with no uneven frames), as short as 1.5 ms (SHADPS4_VR_EVENT_MIN_US) and as
+    // long as 12.5 ms.
+    const double target_fps = [] {
+        const char* value = std::getenv("SHADPS4_VR_TARGET_FPS");
+        const double fps = value != nullptr ? std::atof(value) : 0.0;
+        return fps >= 20.0 && fps <= 60.0 ? fps : 0.0;
+    }();
+    const double shortest_period = [] {
+        const char* value = std::getenv("SHADPS4_VR_EVENT_MIN_US");
+        const int us = value != nullptr ? std::atoi(value) : 0;
+        return us >= 1000 ? us * 1e-6 : 1.5e-3;
+    }();
+    const bool adaptive_events = target_fps > 0.0 && early_flips;
+    const std::chrono::nanoseconds fixed_period = [adaptive_events] {
+        if (adaptive_events) {
+            return std::chrono::nanoseconds{8333333};
+        }
+        const char* value = std::getenv("SHADPS4_VR_EVENT_US");
+        const int us = value != nullptr ? std::atoi(value) : 0;
+        return us >= 1000 ? std::chrono::nanoseconds{static_cast<s64>(us) * 1000}
+                          : std::chrono::nanoseconds{0};
+    }();
+    Common::AccurateTimer timer{early_flips ? (adaptive_events
+                                                   ? std::chrono::nanoseconds{500000}
+                                               : fixed_period.count() > 0
+                                                   ? fixed_period / 8
+                                                   : vblank_period / LooksPerRefresh)
+                                            : vblank_period};
+    refresh_clock.SetFixedPeriod(fixed_period);
+    if (adaptive_events) {
+        LOG_INFO(Lib_VideoOut,
+                 "The headset's refresh follows what the title's frames take, for {:.0f} frames a "
+                 "second (SHADPS4_VR_TARGET_FPS)",
+                 target_fps);
+    } else if (fixed_period.count() > 0) {
+        LOG_INFO(Lib_VideoOut, "The headset refreshes by the clock every {:.2f} ms "
+                               "(SHADPS4_VR_EVENT_US)",
+                 std::chrono::duration<double, std::milli>(fixed_period).count());
+    }
 
     const auto receive_request = [this] -> Request {
         std::scoped_lock lk{mutex};
@@ -762,16 +847,74 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         }
         return {};
     };
-    const auto flip_hmd_frame = [this, &refresh_clock](const Request& request) {
+    double event_period = std::chrono::duration<double>(fixed_period).count();
+    double frame_average = 0.0;
+    std::chrono::steady_clock::time_point last_flip;
+    std::chrono::steady_clock::time_point period_report;
+    double period_sum = 0.0;
+    u32 period_count = 0;
+    const auto flip_hmd_frame = [this, &refresh_clock, &event_period, &frame_average, &last_flip,
+                                 &period_report, &period_sum, &period_count, adaptive_events,
+                                 target_fps, shortest_period](const Request& request) {
         const auto now = std::chrono::steady_clock::now();
         Vulkan::FrameStats::Time(Vulkan::FrameStats::Stage::Queued, now - request.prepared);
         Flip(request);
         refresh_clock.NoteDelivery(now, Core::KnownTitle::FramePace());
+        if (adaptive_events) {
+            if (last_flip != std::chrono::steady_clock::time_point{}) {
+                const double frame = std::chrono::duration<double>(now - last_flip).count();
+                if (frame < 0.15) {
+                    frame_average = frame_average == 0.0
+                                        ? frame
+                                        : frame_average + (frame - frame_average) * 0.2;
+                    // (A frame is about 2.5 periods longer than the title's own work.)
+                    event_period += 0.25 * (1.0 / target_fps - frame_average) / 2.5;
+                    event_period = std::clamp(event_period, shortest_period, 0.0125);
+                    refresh_clock.SetFixedPeriod(std::chrono::nanoseconds{
+                        static_cast<s64>(event_period * 1e9)});
+                }
+            }
+            last_flip = now;
+            period_sum += event_period;
+            ++period_count;
+            if (period_report == std::chrono::steady_clock::time_point{}) {
+                period_report = now;
+            }
+            if (now - period_report >= std::chrono::seconds{5}) {
+                LOG_INFO(Lib_VideoOut,
+                         "Adaptive refresh: {:.2f} ms on average over the last 5 s, now {:.2f} "
+                         "ms; frames take {:.1f} ms ({:.1f} a second), wanted {:.1f} ms",
+                         period_sum / std::max(period_count, 1u) * 1e3, event_period * 1e3,
+                         frame_average * 1e3, frame_average > 0.0 ? 1.0 / frame_average : 0.0,
+                         1e3 / target_fps);
+                period_report = now;
+                period_sum = 0.0;
+                period_count = 0;
+            }
+        }
         FRAME_END;
     };
 
     // How many refreshes of the display two of the headset's last.
     u32 pace = 2;
+    // DIAGNOSTIC: SHADPS4_VR_EVENT_HALVES=<n> sets how many half refreshes of the display one
+    // refresh of the headset lasts (2 is the default: one for one).
+    // SHADPS4_VR_EVENT_EIGHTHS=<n> (1 to 32) does the same in eighths of a refresh: 8 is the
+    // default, 4 is half a refresh, 2 a quarter.
+    const u32 forced_eighths = [] {
+        const char* value = std::getenv("SHADPS4_VR_EVENT_EIGHTHS");
+        if (value != nullptr && std::atoi(value) >= 1) {
+            return static_cast<u32>(std::min(std::atoi(value), 32));
+        }
+        value = std::getenv("SHADPS4_VR_EVENT_HALVES");
+        const int halves = value != nullptr ? std::atoi(value) : 0;
+        return halves >= 1 ? static_cast<u32>(std::min(halves, 8)) * 4 : 0u;
+    }();
+    if (forced_eighths != 0) {
+        pace = std::max(forced_eighths / 4, 1u);
+        LOG_INFO(Lib_VideoOut, "Headset refreshes every {} eighths of a refresh of the display "
+                               "(SHADPS4_VR_EVENT_EIGHTHS)", forced_eighths);
+    }
 
     while (!token.stop_requested()) {
         timer.Start();
@@ -796,9 +939,10 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             // refreshes of the headset for a frame, then takes that many of the display.
             // (A title nothing is known about takes its two refreshes for a frame.)
             if (const u32 wanted = Core::KnownTitle::FramePace(); wanted != 0) {
-                pace = wanted;
+                pace = forced_eighths != 0 ? pace : wanted;
             }
-            if (!refresh_clock.IsRefresh(std::chrono::steady_clock::now(), pace)) {
+            if (!refresh_clock.IsRefresh(std::chrono::steady_clock::now(),
+                                         forced_eighths != 0 ? forced_eighths : pace * 4)) {
                 timer.End();
                 continue;
             }
@@ -844,7 +988,12 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
         // The TV keeps refreshing at its own rate next to the headset, however slowly that
         // refreshes at the moment.
-        social_vblank_accumulator += SocialScreenRefreshRate * pace / 2;
+        social_vblank_accumulator +=
+            SocialScreenRefreshRate *
+            (fixed_period.count() > 0
+                 ? std::max<u32>(1, static_cast<u32>(fixed_period * 8 / vblank_period))
+                 : (forced_eighths != 0 ? forced_eighths : pace * 4)) /
+            8;
         while (social_vblank_accumulator >= vblank_frequency) {
             social_vblank_accumulator -= vblank_frequency;
             if (social_port.is_open) {

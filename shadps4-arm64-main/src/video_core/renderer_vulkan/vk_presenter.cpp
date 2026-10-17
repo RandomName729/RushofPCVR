@@ -27,6 +27,7 @@
 #include "video_core/texture_cache/image.h"
 
 #include <algorithm>
+#include <string_view>
 #include <array>
 #include <atomic>
 #include <cctype>
@@ -49,6 +50,9 @@
 #include <vk_mem_alloc.h>
 
 namespace Vulkan {
+
+// The shape of the window's content area, last told by SetExpectedGameSize.
+static float window_content_ratio = 0.0f;
 
 bool CanBlitToSwapchain(const vk::PhysicalDevice physical_device, vk::Format format) {
     const vk::FormatProperties props{physical_device.getFormatProperties(format)};
@@ -931,12 +935,29 @@ HmdFrames Presenter::PrepareHmdFrame(std::span<const AmdGpu::Image, 2> eye_textu
     // A title that hands over one picture for both eyes (this one's has a circle for each in
     // it) has the window show that picture once, not once for each eye.
     const bool one_picture = image_ids[0].index == image_ids[1].index;
+    // SHADPS4_PC_WINDOW=left|right|both: what the window shows of a one-picture title's picture
+    // (it holds a circle for each eye side by side): the left eye's half (the default), the right
+    // eye's, or all of it. The headset is not affected.
+    static const int window_view = [] {
+        const char* value = std::getenv("SHADPS4_PC_WINDOW");
+        if (value == nullptr) {
+            return 1;
+        }
+        const std::string_view v{value};
+        return v == "both" || v == "all" ? 0 : (v == "right" ? 2 : 1);
+    }();
     Frame* frame = vr_exporter->Acquire(swapchain.GetSurfaceFormat().format);
     const bool exported = frame != nullptr;
     Frame* const local = exported ? nullptr : vr_exporter->AcquireLocal(eye_width * 2, eye_height);
     if (!exported) {
-        expected_ratio = static_cast<float>(one_picture ? eye_width : eye_width * 2) /
+        expected_ratio = static_cast<float>(one_picture ? (window_view == 0 ? eye_width
+                                                                            : eye_width / 2)
+                                                        : eye_width * 2) /
                          static_cast<float>(eye_height);
+        if (one_picture && window_view != 0) {
+            // The cropped view is cut to the shape of the window, so that it fills it.
+            expected_ratio = window_content_ratio > 0.1f ? window_content_ratio : 16.0f / 9.0f;
+        }
         frame = GetRenderFrame();
         if (!frame && !local) {
             return {};
@@ -1130,7 +1151,34 @@ HmdFrames Presenter::PrepareHmdFrame(std::span<const AmdGpu::Image, 2> eye_textu
                     .extent{.width = frame->width, .height = frame->height},
                 },
             };
-            pp_pass.Render(cmdbuf, std::span{&whole, 1}, *frame, hmd_settings, marker);
+            auto window_settings = hmd_settings;
+            if (window_view != 0) {
+                // The largest rectangle of the window's shape that fits inside the eye's lens
+                // circle (centres and radii as measured for the mask, in picture units), so the
+                // view has no black corners. SHADPS4_PC_WINDOW_ZOOM scales it: below 1 closer
+                // in, above 1 more of the picture (and so black corners again).
+                static const float zoom = [] {
+                    const char* value = std::getenv("SHADPS4_PC_WINDOW_ZOOM");
+                    return value != nullptr
+                               ? std::clamp(static_cast<float>(std::atof(value)), 0.3f, 2.0f)
+                               : 1.0f;
+                }();
+                constexpr float radius_x = 0.2816f, radius_y = 0.523f;
+                const float centre_x = window_view == 2 ? 0.7533f : 0.2335f;
+                constexpr float centre_y = 0.475f;
+                const float shape = static_cast<float>(frame->width) /
+                                    static_cast<float>(frame->height > 0 ? frame->height : 1);
+                const float width_per_height = shape * static_cast<float>(eye_height) /
+                                               static_cast<float>(eye_width);
+                const float a = width_per_height / radius_x;
+                const float half_h = 0.97f * zoom / std::sqrt(a * a + 1.0f / (radius_y * radius_y));
+                const float half_w = half_h * width_per_height;
+                window_settings.crop_x = centre_x - half_w;
+                window_settings.crop_y = centre_y - half_h;
+                window_settings.crop_w = half_w * 2.0f;
+                window_settings.crop_h = half_h * 2.0f;
+            }
+            pp_pass.Render(cmdbuf, std::span{&whole, 1}, *frame, window_settings, marker);
         } else {
             pp_pass.Render(cmdbuf, regions_for(*frame), *frame, hmd_settings, marker);
         }
@@ -1970,6 +2018,7 @@ Frame* Presenter::GetRenderFrame() {
 
 void Presenter::SetExpectedGameSize(s32 width, s32 height) {
     const float ratio = (float)width / (float)height;
+    window_content_ratio = ratio;
 
     expected_frame_height = height;
     expected_frame_width = width;

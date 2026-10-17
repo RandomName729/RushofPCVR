@@ -34,6 +34,10 @@
 #include <signal.h>
 #endif
 
+namespace Libraries::Kernel {
+void InstallGuestClockFix();
+}
+
 namespace Core {
 
 static PS4_SYSV_ABI void ProgramExitFunc() {
@@ -527,8 +531,13 @@ void Linker::Execute(const std::vector<std::string>& args) {
 
     memory->SetupMemoryRegions(fmem_size, use_extended_mem1, use_extended_mem2);
 
+    Libraries::Kernel::InstallGuestClockFix();
+    Common::TuneHostForGame();
+
     main_thread.Run([this, module, &args](std::stop_token) {
         Common::SetCurrentThreadName("Game:Main");
+        // A frame waits for this thread above all.
+        Common::SetCurrentThreadPriority(Common::ThreadPriority::VeryHigh);
         std::set_terminate(Common::Log::Terminate);
 
 #ifndef _WIN32 // Clear any existing signal mask for game threads.

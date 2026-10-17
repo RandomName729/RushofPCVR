@@ -31,6 +31,11 @@ public:
         float mask = 0.0f;
         /// 0: off. Above (up to 1): edges are smoothed, the more the higher (post_process.frag).
         float fxaa = 0.0f;
+        /// The part of the input that is shown, in input units: top left corner, then size.
+        float crop_x = 0.0f;
+        float crop_y = 0.0f;
+        float crop_w = 1.0f;
+        float crop_h = 1.0f;
     };
 
     void Create(const Instance& instance, MasterSemaphore* master_semaphore,

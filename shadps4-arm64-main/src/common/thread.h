@@ -22,6 +22,11 @@ void SetCurrentThreadRealtime(std::chrono::nanoseconds period_ns);
 
 void SetCurrentThreadPriority(ThreadPriority new_priority);
 
+// Asks the host for what a title that is paced to a few milliseconds needs: a fine system clock,
+// no power throttling and (on a processor with fast and slow cores) the fast cores.
+// SHADPS4_NO_HOST_TUNING=1 does none of that, SHADPS4_ALL_CORES=1 leaves out the last.
+void TuneHostForGame();
+
 void SetCurrentThreadName(const char* name);
 
 void SetThreadName(void* thread, const char* name);

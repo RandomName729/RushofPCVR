@@ -48,6 +48,37 @@ function Save-Setting([string]$key, [string]$value) {
 }
 Read-Settings
 
+# PS4 Pro mode ("neo_mode" in user\config.json): the emulator then tells the game it runs on a
+# PlayStation 4 Pro, which gives sharper textures. The emulator reads it as it starts.
+$configFile = Join-Path $here "user\config.json"
+function Get-NeoMode {
+    try {
+        if (Test-Path -LiteralPath $configFile) {
+            $found = [regex]::Match([IO.File]::ReadAllText($configFile), '"neo_mode"\s*:\s*(true|false)')
+            if ($found.Success) { return ($found.Groups[1].Value -eq "true") }
+        }
+    } catch {}
+    return $false
+}
+function Set-NeoMode([bool]$on) {
+    try {
+        if (-not (Test-Path -LiteralPath $configFile)) { return }
+        $bytes = [IO.File]::ReadAllBytes($configFile)
+        $skip = 0
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { $skip = 3 }
+        $text = [Text.Encoding]::UTF8.GetString($bytes, $skip, $bytes.Length - $skip)
+        $word = if ($on) { "true" } else { "false" }
+        $new = [regex]::Replace($text, '("neo_mode"\s*:\s*)(true|false)', ('${1}' + $word))
+        if ($new -ne $text) {
+            $body = [Text.Encoding]::UTF8.GetBytes($new)
+            $all = New-Object byte[] ($skip + $body.Length)
+            if ($skip -gt 0) { [Array]::Copy($bytes, 0, $all, 0, $skip) }
+            [Array]::Copy($body, 0, $all, $skip, $body.Length)
+            [IO.File]::WriteAllBytes($configFile, $all)
+        }
+    } catch {}
+}
+
 # The sizes an eye can be drawn at: the console's own (1152x1296: the game draws both eyes into
 # one picture of 2304x1296) and larger, all the same shape (the height is 9/8 of the width).
 $widths = @(1152, 1344, 1536, 1728, 1920, 2048, 2304, 2560, 2880)
@@ -58,6 +89,551 @@ $caps = @(120, 90, 72, 60, 45, 40, 36, 30)
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
+
+# --- the window (the new look) -----------------------------------------------------------------
+# The controls of the window are drawn by the launcher itself (the small program below, built
+# when the launcher starts). When that cannot be built, the plain window further down is used.
+$uiSource = @'
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+
+namespace RushUi
+{
+    public static class Theme
+    {
+        public static readonly Color Back = Color.FromArgb(17, 18, 23);
+        public static readonly Color Card = Color.FromArgb(27, 29, 37);
+        public static readonly Color Field = Color.FromArgb(40, 43, 55);
+        public static readonly Color FieldHover = Color.FromArgb(52, 56, 71);
+        public static readonly Color Line = Color.FromArgb(46, 49, 62);
+        public static readonly Color Text = Color.FromArgb(235, 237, 243);
+        public static readonly Color Dim = Color.FromArgb(143, 149, 165);
+        public static readonly Color Accent = Color.FromArgb(232, 69, 79);
+        public static readonly Color AccentHover = Color.FromArgb(243, 98, 107);
+        public static readonly Color AccentDown = Color.FromArgb(200, 52, 62);
+
+        public static GraphicsPath Round(RectangleF r, float radius)
+        {
+            float d = radius * 2f;
+            GraphicsPath p = new GraphicsPath();
+            p.AddArc(r.X, r.Y, d, d, 180, 90);
+            p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            p.CloseFigure();
+            return p;
+        }
+
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+        // A dark title bar in the colour of the window (Windows 10 and 11; ignored where it is not there).
+        public static void DarkTitleBar(Form form)
+        {
+            try
+            {
+                IntPtr h = form.Handle;
+                int on = 1;
+                DwmSetWindowAttribute(h, 20, ref on, 4);
+                int caption = Back.R | (Back.G << 8) | (Back.B << 16);
+                DwmSetWindowAttribute(h, 35, ref caption, 4);
+                int text = Text.R | (Text.G << 8) | (Text.B << 16);
+                DwmSetWindowAttribute(h, 36, ref text, 4);
+            }
+            catch (Exception) { }
+        }
+    }
+
+    // A rounded panel with a title.
+    public class Card : Panel
+    {
+        private Font titleFont = new Font("Segoe UI Semibold", 10.5f);
+        public string Title { get; set; }
+
+        public Card()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            BackColor = Theme.Card;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(Parent != null ? Parent.BackColor : Theme.Back);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (GraphicsPath p = Theme.Round(new RectangleF(0.5f, 0.5f, Width - 2f, Height - 2f), 10f))
+            using (SolidBrush b = new SolidBrush(Theme.Card))
+            using (Pen pen = new Pen(Theme.Line))
+            {
+                g.FillPath(b, p);
+                g.DrawPath(pen, p);
+            }
+            if (!string.IsNullOrEmpty(Title))
+            {
+                TextRenderer.DrawText(g, Title, titleFont, new Point(18, 14), Theme.Text,
+                                      TextFormatFlags.NoPadding | TextFormatFlags.Left);
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { titleFont.Dispose(); }
+            base.Dispose(disposing);
+        }
+    }
+
+    public class DarkColors : ProfessionalColorTable
+    {
+        public override Color ToolStripDropDownBackground { get { return Theme.Field; } }
+        public override Color MenuBorder { get { return Theme.Line; } }
+        public override Color MenuItemBorder { get { return Theme.FieldHover; } }
+        public override Color MenuItemSelected { get { return Theme.FieldHover; } }
+        public override Color MenuItemSelectedGradientBegin { get { return Theme.FieldHover; } }
+        public override Color MenuItemSelectedGradientEnd { get { return Theme.FieldHover; } }
+        public override Color MenuItemPressedGradientBegin { get { return Theme.FieldHover; } }
+        public override Color MenuItemPressedGradientMiddle { get { return Theme.FieldHover; } }
+        public override Color MenuItemPressedGradientEnd { get { return Theme.FieldHover; } }
+        public override Color ImageMarginGradientBegin { get { return Theme.Field; } }
+        public override Color ImageMarginGradientMiddle { get { return Theme.Field; } }
+        public override Color ImageMarginGradientEnd { get { return Theme.Field; } }
+        public override Color SeparatorDark { get { return Theme.Line; } }
+        public override Color SeparatorLight { get { return Theme.Line; } }
+    }
+
+    public class DarkRenderer : ToolStripProfessionalRenderer
+    {
+        public DarkRenderer() : base(new DarkColors()) { RoundedEdges = false; }
+    }
+
+    // A drop-down list in the window's own style.
+    public class Dropdown : Control
+    {
+        private List<string> items = new List<string>();
+        private int index = -1;
+        private bool hover;
+        private bool open;
+        private int closedAt = -10000;
+        private ContextMenuStrip menu;
+
+        public event EventHandler SelectedIndexChanged;
+
+        public Dropdown()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+                     ControlStyles.Selectable, true);
+            TabStop = true;
+            Cursor = Cursors.Hand;
+            Height = 34;
+        }
+
+        public List<string> Items { get { return items; } }
+
+        public int SelectedIndex
+        {
+            get { return index; }
+            set
+            {
+                if (value < -1 || value >= items.Count || value == index) { return; }
+                index = value;
+                Invalidate();
+                if (SelectedIndexChanged != null) { SelectedIndexChanged(this, EventArgs.Empty); }
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(Parent != null ? Parent.BackColor : Theme.Card);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            RectangleF box = new RectangleF(0.5f, 0.5f, Width - 2f, Height - 2f);
+            using (GraphicsPath p = Theme.Round(box, 7f))
+            using (SolidBrush b = new SolidBrush((hover || open) ? Theme.FieldHover : Theme.Field))
+            {
+                g.FillPath(b, p);
+                if (Focused && ShowFocusCues)
+                {
+                    using (Pen ring = new Pen(Theme.Accent, 1.5f)) { g.DrawPath(ring, p); }
+                }
+            }
+            string s = (index >= 0 && index < items.Count) ? items[index] : "";
+            TextRenderer.DrawText(g, s, Font, new Rectangle(12, 0, Width - 40, Height), Theme.Text,
+                                  TextFormatFlags.VerticalCenter | TextFormatFlags.Left |
+                                  TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            float cx = Width - 18f;
+            float cy = Height / 2f;
+            using (Pen pen = new Pen(Theme.Dim, 1.8f))
+            {
+                pen.StartCap = LineCap.Round;
+                pen.EndCap = LineCap.Round;
+                pen.LineJoin = LineJoin.Round;
+                g.DrawLines(pen, new PointF[] { new PointF(cx - 4f, cy - 2f), new PointF(cx, cy + 2f), new PointF(cx + 4f, cy - 2f) });
+            }
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; Invalidate(); }
+        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
+        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+
+        protected override void OnClick(EventArgs e)
+        {
+            base.OnClick(e);
+            Focus();
+            if (unchecked(Environment.TickCount - closedAt) < 250) { return; }
+            OpenMenu();
+        }
+
+        protected override bool IsInputKey(Keys keyData)
+        {
+            Keys k = keyData & Keys.KeyCode;
+            if (k == Keys.Up || k == Keys.Down) { return true; }
+            return base.IsInputKey(keyData);
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (e.KeyCode == Keys.Down) { SelectedIndex = Math.Min(items.Count - 1, index + 1); e.Handled = true; }
+            else if (e.KeyCode == Keys.Up) { SelectedIndex = Math.Max(0, index - 1); e.Handled = true; }
+            else if (e.KeyCode == Keys.Space || e.KeyCode == Keys.F4) { OpenMenu(); e.Handled = true; }
+        }
+
+        private void OpenMenu()
+        {
+            if (open || items.Count == 0) { return; }
+            if (menu != null) { menu.Dispose(); }
+            menu = new ContextMenuStrip();
+            menu.Renderer = new DarkRenderer();
+            menu.BackColor = Theme.Field;
+            menu.ForeColor = Theme.Text;
+            menu.Font = Font;
+            menu.ShowImageMargin = false;
+            menu.ShowCheckMargin = false;
+            menu.MinimumSize = new Size(Width, 0);
+            for (int i = 0; i < items.Count; i++)
+            {
+                ToolStripMenuItem mi = new ToolStripMenuItem(items[i]);
+                mi.Tag = i;
+                mi.Padding = new Padding(4, 5, 4, 5);
+                mi.ForeColor = (i == index) ? Theme.Accent : Theme.Text;
+                mi.Click += OnPick;
+                menu.Items.Add(mi);
+            }
+            menu.Closed += OnMenuClosed;
+            open = true;
+            Invalidate();
+            menu.Show(this, new Point(0, Height + 4));
+        }
+
+        private void OnPick(object sender, EventArgs e)
+        {
+            ToolStripMenuItem mi = sender as ToolStripMenuItem;
+            if (mi != null) { SelectedIndex = (int)mi.Tag; }
+        }
+
+        private void OnMenuClosed(object sender, ToolStripDropDownClosedEventArgs e)
+        {
+            open = false;
+            closedAt = Environment.TickCount;
+            Invalidate();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && menu != null) { menu.Dispose(); }
+            base.Dispose(disposing);
+        }
+    }
+
+    // A slider with whole-number steps.
+    public class Slider : Control
+    {
+        private int min = 0;
+        private int max = 10;
+        private int val = 0;
+        private bool drag;
+        private bool hover;
+
+        public event EventHandler ValueChanged;
+
+        public Slider()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+                     ControlStyles.Selectable, true);
+            TabStop = true;
+            Cursor = Cursors.Hand;
+            Height = 30;
+        }
+
+        public int Minimum { get { return min; } set { min = value; Invalidate(); } }
+        public int Maximum { get { return max; } set { max = value; Invalidate(); } }
+
+        public int Value
+        {
+            get { return val; }
+            set
+            {
+                int v = Math.Max(min, Math.Min(max, value));
+                if (v == val) { return; }
+                val = v;
+                Invalidate();
+                if (ValueChanged != null) { ValueChanged(this, EventArgs.Empty); }
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(Parent != null ? Parent.BackColor : Theme.Card);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            float pad = 11f;
+            float w = Width - 2f * pad;
+            float cy = Height / 2f - 2f;
+            float span = Math.Max(1, max - min);
+            float tx = pad + w * (val - min) / span;
+            using (GraphicsPath track = Theme.Round(new RectangleF(pad, cy - 2f, w, 4f), 2f))
+            using (SolidBrush b = new SolidBrush(Theme.Field))
+            {
+                g.FillPath(b, track);
+            }
+            if (tx - pad >= 4f)
+            {
+                using (GraphicsPath fill = Theme.Round(new RectangleF(pad, cy - 2f, tx - pad, 4f), 2f))
+                using (SolidBrush b = new SolidBrush(Theme.Accent))
+                {
+                    g.FillPath(b, fill);
+                }
+            }
+            if (max - min <= 24)
+            {
+                using (Pen tick = new Pen(Theme.Line, 1f))
+                {
+                    for (int i = min; i <= max; i++)
+                    {
+                        float x = pad + w * (i - min) / span;
+                        g.DrawLine(tick, x, cy + 9f, x, cy + 12f);
+                    }
+                }
+            }
+            if (drag || hover || (Focused && ShowFocusCues))
+            {
+                using (SolidBrush halo = new SolidBrush(Color.FromArgb(55, Theme.Accent)))
+                {
+                    g.FillEllipse(halo, tx - 13f, cy - 13f, 26f, 26f);
+                }
+            }
+            using (SolidBrush knob = new SolidBrush(Theme.Text))
+            using (Pen ring = new Pen(Theme.Accent, 2f))
+            {
+                g.FillEllipse(knob, tx - 8f, cy - 8f, 16f, 16f);
+                g.DrawEllipse(ring, tx - 8f, cy - 8f, 16f, 16f);
+            }
+        }
+
+        private void SetFromX(int x)
+        {
+            float t = (x - 11f) / Math.Max(1f, Width - 22f);
+            t = Math.Max(0f, Math.Min(1f, t));
+            Value = min + (int)Math.Round(t * (max - min));
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            Focus();
+            drag = true;
+            SetFromX(e.X);
+            Invalidate();
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            if (drag) { SetFromX(e.X); }
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            drag = false;
+            Invalidate();
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; Invalidate(); }
+        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
+        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+
+        protected override bool IsInputKey(Keys keyData)
+        {
+            Keys k = keyData & Keys.KeyCode;
+            if (k == Keys.Left || k == Keys.Right || k == Keys.Up || k == Keys.Down ||
+                k == Keys.Home || k == Keys.End) { return true; }
+            return base.IsInputKey(keyData);
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            switch (e.KeyCode)
+            {
+                case Keys.Left:
+                case Keys.Down: Value = val - 1; e.Handled = true; break;
+                case Keys.Right:
+                case Keys.Up: Value = val + 1; e.Handled = true; break;
+                case Keys.Home: Value = min; e.Handled = true; break;
+                case Keys.End: Value = max; e.Handled = true; break;
+            }
+        }
+    }
+
+    // A switch with a text beside it.
+    public class Toggle : Control
+    {
+        private bool on;
+        private bool hover;
+
+        public event EventHandler CheckedChanged;
+
+        public Toggle()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw |
+                     ControlStyles.Selectable, true);
+            TabStop = true;
+            Cursor = Cursors.Hand;
+            Height = 26;
+        }
+
+        public bool Checked
+        {
+            get { return on; }
+            set
+            {
+                if (on == value) { return; }
+                on = value;
+                Invalidate();
+                if (CheckedChanged != null) { CheckedChanged(this, EventArgs.Empty); }
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(Parent != null ? Parent.BackColor : Theme.Back);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            float top = (Height - 20f) / 2f;
+            Color fill = on ? Theme.Accent : (hover ? Theme.FieldHover : Theme.Field);
+            using (GraphicsPath pill = Theme.Round(new RectangleF(0.5f, top, 37f, 20f), 10f))
+            using (SolidBrush b = new SolidBrush(fill))
+            {
+                g.FillPath(b, pill);
+                if (Focused && ShowFocusCues)
+                {
+                    using (Pen ring = new Pen(Theme.Accent, 1.5f)) { g.DrawPath(ring, pill); }
+                }
+            }
+            float kx = on ? 21f : 4f;
+            using (SolidBrush knob = new SolidBrush(Color.White))
+            {
+                g.FillEllipse(knob, kx, top + 3f, 14f, 14f);
+            }
+            TextRenderer.DrawText(g, Text, Font, new Rectangle(48, 0, Math.Max(1, Width - 48), Height), Theme.Text,
+                                  TextFormatFlags.VerticalCenter | TextFormatFlags.Left |
+                                  TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        }
+
+        protected override void OnClick(EventArgs e)
+        {
+            base.OnClick(e);
+            Focus();
+            Checked = !on;
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (e.KeyCode == Keys.Space) { Checked = !on; e.Handled = true; }
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; Invalidate(); }
+        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
+        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+    }
+
+    // A rounded button; Primary is the one in the accent colour.
+    public class FlatButton : Button
+    {
+        private bool hover;
+        private bool down;
+        private Font buttonFont = new Font("Segoe UI Semibold", 10f);
+        public bool Primary { get; set; }
+
+        public FlatButton()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            Cursor = Cursors.Hand;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(Parent != null ? Parent.BackColor : Theme.Back);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            Color fill;
+            if (Primary) { fill = down ? Theme.AccentDown : (hover ? Theme.AccentHover : Theme.Accent); }
+            else { fill = down ? Theme.Line : (hover ? Theme.FieldHover : Theme.Field); }
+            using (GraphicsPath p = Theme.Round(new RectangleF(0.5f, 0.5f, Width - 2f, Height - 2f), 8f))
+            using (SolidBrush b = new SolidBrush(fill))
+            {
+                g.FillPath(b, p);
+                if (Focused && ShowFocusCues)
+                {
+                    using (Pen ring = new Pen(Primary ? Theme.Text : Theme.Accent, 1.5f)) { g.DrawPath(ring, p); }
+                }
+            }
+            TextRenderer.DrawText(g, Text, buttonFont, new Rectangle(0, 0, Width, Height), Color.White,
+                                  TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
+                                  TextFormatFlags.NoPadding);
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; down = false; Invalidate(); }
+        protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); down = true; Invalidate(); }
+        protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); down = false; Invalidate(); }
+        protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
+        protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { buttonFont.Dispose(); }
+            base.Dispose(disposing);
+        }
+    }
+}
+'@
+$script:modernUi = $false
+$script:modernTried = $false
+# Builds the controls, once, when the window is first wanted.
+function Enable-ModernUi {
+    if ($script:modernTried) { return }
+    $script:modernTried = $true
+    try {
+        Add-Type -TypeDefinition $uiSource -ReferencedAssemblies @("System.Windows.Forms", "System.Drawing") -Language CSharp -ErrorAction Stop
+        $script:modernUi = $true
+    } catch {
+        Say ("The new look of the window could not be built (" + $_.Exception.Message + "); the plain window is used.") "Yellow"
+    }
+}
 
 # A message box, on top of whatever else is on the desktop (which is what the headset shows).
 # Returns the name of the button chosen: OK, Yes, No, Cancel.
@@ -515,12 +1091,12 @@ function Test-Runtime {
     return $true
 }
 
-# --- the window -------------------------------------------------------------------------------
-function Show-Menu {
+# --- the window (the plain one, when the new look cannot be built) ----------------------------
+function Show-MenuClassic {
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "RushVR"
-    $form.ClientSize = New-Object System.Drawing.Size(560, 488)
+    $form.ClientSize = New-Object System.Drawing.Size(560, 620)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedDialog"
     $form.MaximizeBox = $false
@@ -647,6 +1223,28 @@ function Show-Menu {
     $form.Controls.Add($label)
     $y += 26
 
+    $anisoValues = @("0", "2", "4", "8", "16")
+    $anisoNames = @("Off (as the game draws)", "2x", "4x", "8x", "16x (recommended)")
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = "Sharper textures (anisotropic)"
+    $label.SetBounds(16, $y + 3, 170, 22)
+    $form.Controls.Add($label)
+    $anisoBox = New-Object System.Windows.Forms.ComboBox
+    $anisoBox.DropDownStyle = "DropDownList"
+    foreach ($name in $anisoNames) { [void]$anisoBox.Items.Add($name) }
+    $anisoBox.SetBounds(190, $y, 300, 26)
+    $anisoNow = 16
+    [void][int]::TryParse((Setting "aniso" "16"), [ref]$anisoNow)
+    $best = 4
+    $bestDistance = 1000
+    for ($i = 0; $i -lt $anisoValues.Count; $i++) {
+        $distance = [math]::Abs([int]$anisoValues[$i] - $anisoNow)
+        if ($distance -lt $bestDistance) { $best = $i; $bestDistance = $distance }
+    }
+    $anisoBox.SelectedIndex = $best
+    $form.Controls.Add($anisoBox)
+    $y += 32
+
     $fxaaValues = @("0", "0.35", "0.65", "1")
     $fxaaNames = @("Off", "Light", "Normal", "Strong")
     $label = New-Object System.Windows.Forms.Label
@@ -691,6 +1289,47 @@ function Show-Menu {
     $form.Controls.Add($maskBox)
     $y += 34
 
+    # Frame rate the game is held to.
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = "Frame rate"
+    $label.Font = New-Object System.Drawing.Font("Segoe UI", 9.5, [System.Drawing.FontStyle]::Bold)
+    $label.SetBounds(16, $y, 520, 20)
+    $form.Controls.Add($label)
+    $y += 26
+    $targetValues = @("0", "30", "35", "40", "45", "50", "60")
+    $targetNames = @("Original timing (the game sets its own pace: slow in busy scenes)", "30 a second", "35 a second", "40 a second (steady at 80 Hz)", "45 a second (steady at 90 Hz)", "50 a second", "60 a second (recommended, steady at 120 Hz)")
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = "Aim for"
+    $label.SetBounds(16, $y + 3, 170, 22)
+    $form.Controls.Add($label)
+    $targetBox = New-Object System.Windows.Forms.ComboBox
+    $targetBox.DropDownStyle = "DropDownList"
+    foreach ($name in $targetNames) { [void]$targetBox.Items.Add($name) }
+    $targetBox.SetBounds(190, $y, 354, 26)
+    $targetNow = 60
+    [void][int]::TryParse((Setting "target_fps" "60"), [ref]$targetNow)
+    $best = 6
+    $bestDistance = 1000
+    for ($i = 0; $i -lt $targetValues.Count; $i++) {
+        $distance = [math]::Abs([int]$targetValues[$i] - $targetNow)
+        if ($distance -lt $bestDistance) { $best = $i; $bestDistance = $distance }
+    }
+    $targetBox.SelectedIndex = $best
+    $form.Controls.Add($targetBox)
+    $y += 28
+    $targetText = New-Object System.Windows.Forms.Label
+    $targetText.Text = "The emulator holds the game to this rate. 60 is the game's own and looks smoothest with Virtual Desktop's frame rate at 120 (Streaming tab); at 90 or 80 use 45 or 40. Lower is steadier on a slower PC."
+    $targetText.SetBounds(16, $y, 528, 40)
+    $form.Controls.Add($targetText)
+    $y += 46
+
+    $neo = New-Object System.Windows.Forms.CheckBox
+    $neo.Text = "PS4 Pro mode (sharper textures)"
+    $neo.Checked = Get-NeoMode
+    $neo.SetBounds(16, $y, 340, 24)
+    $form.Controls.Add($neo)
+    $y += 28
+
     $again = New-Object System.Windows.Forms.CheckBox
     $again.Text = "Show this window at every start"
     $again.Checked = (Setting "menu" "1") -ne "0"
@@ -714,12 +1353,248 @@ function Show-Menu {
     if ($result -ne [System.Windows.Forms.DialogResult]::OK) { return $false }
     Save-Setting "runtime" ($runtimeKeys[$runtimeBox.SelectedIndex])
     Save-Setting "eye_width" ($widths[$resolution.Value])
+    Save-Setting "aniso" ($anisoValues[$anisoBox.SelectedIndex])
     Save-Setting "fxaa" ($fxaaValues[$fxaaBox.SelectedIndex])
     Save-Setting "mask" ($maskValues[$maskBox.SelectedIndex])
+    Save-Setting "target_fps" ($targetValues[$targetBox.SelectedIndex])
     Save-Setting "fov" ($fov.Value * 5)
     Save-Setting "menu" ($(if ($again.Checked) { "1" } else { "0" }))
+    Set-NeoMode $neo.Checked
     Read-Settings
     return $true
+}
+
+# --- the window (the new look) ----------------------------------------------------------------
+function Read-Number([string]$key, [double]$default) {
+    $number = 0.0
+    if ([double]::TryParse((Setting $key "$default"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$number)) { return $number }
+    return $default
+}
+# The place in the values of the one nearest to what is set now.
+function Find-Nearest([double[]]$values, [double]$now) {
+    $best = 0
+    $bestDistance = [double]::MaxValue
+    for ($i = 0; $i -lt $values.Count; $i++) {
+        $distance = [math]::Abs($values[$i] - $now)
+        if ($distance -lt $bestDistance) { $best = $i; $bestDistance = $distance }
+    }
+    return $best
+}
+function New-Card([string]$title, [int]$x, [int]$y, [int]$w, [int]$h) {
+    $card = New-Object RushUi.Card
+    $card.Title = $title
+    $card.SetBounds($x, $y, $w, $h)
+    return $card
+}
+function New-Label($parent, [string]$text, [int]$x, [int]$y, [int]$w, [int]$h, $color,
+                   [double]$size = 9.5, [string]$family = "Segoe UI", [string]$align = "TopLeft") {
+    $label = New-Object System.Windows.Forms.Label
+    $label.AutoSize = $false
+    $label.Text = $text
+    $label.SetBounds($x, $y, $w, $h)
+    $label.ForeColor = $color
+    $label.BackColor = $parent.BackColor
+    $label.Font = New-Object System.Drawing.Font($family, [single]$size)
+    $label.TextAlign = $align
+    $parent.Controls.Add($label)
+    return $label
+}
+function New-Dropdown($parent, [string[]]$names, [int]$selected, [int]$x, [int]$y, [int]$w) {
+    $box = New-Object RushUi.Dropdown
+    foreach ($name in $names) { [void]$box.Items.Add($name) }
+    $box.SetBounds($x, $y, $w, 34)
+    $box.SelectedIndex = $selected
+    $parent.Controls.Add($box)
+    return $box
+}
+function New-Slider($parent, [int]$minimum, [int]$maximum, [int]$value, [int]$x, [int]$y, [int]$w) {
+    $slider = New-Object RushUi.Slider
+    $slider.Minimum = $minimum
+    $slider.Maximum = $maximum
+    $slider.SetBounds($x, $y, $w, 30)
+    $slider.Value = $value
+    $parent.Controls.Add($slider)
+    return $slider
+}
+
+function Show-MenuModern {
+    $script:menuOutcome = "plain"
+    try {
+        $cText = [RushUi.Theme]::Text
+        $cDim = [RushUi.Theme]::Dim
+        $cAccent = [RushUi.Theme]::Accent
+
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = "RushVR"
+        $form.ClientSize = New-Object System.Drawing.Size(736, 618)
+        $form.StartPosition = "CenterScreen"
+        $form.FormBorderStyle = "FixedDialog"
+        $form.MaximizeBox = $false
+        $form.MinimizeBox = $false
+        $form.TopMost = $true
+        $form.BackColor = [RushUi.Theme]::Back
+        $form.ForeColor = $cText
+        $form.Font = New-Object System.Drawing.Font("Segoe UI", 9.5)
+        $tips = New-Object System.Windows.Forms.ToolTip
+        $tips.InitialDelay = 300
+        $tips.AutoPopDelay = 15000
+
+        [void](New-Label $form "RushVR" 24 14 300 38 $cText 21 "Segoe UI Semibold")
+        [void](New-Label $form "Until Dawn: Rush of Blood on your PC, in your headset" 26 52 500 22 $cDim 9.5)
+
+        # Headset.
+        $headset = New-Card "Headset" 24 92 332 170
+        $form.Controls.Add($headset)
+        [void](New-Label $headset "Connection (OpenXR runtime)" 18 46 296 20 $cDim 9)
+        $runtimeNames = @("Automatic (as the PC has it set up)", "Virtual Desktop", "SteamVR")
+        $runtimeKeys = @("pc", "virtualdesktop", "steamvr")
+        $index = [array]::IndexOf($runtimeKeys, (Setting "runtime" "pc"))
+        if ($index -lt 0) { $index = 0 }
+        $runtimeBox = New-Dropdown $headset $runtimeNames $index 18 68 296
+        $runtimeText = New-Label $headset "" 18 110 296 52 $cDim 8.5
+        $updateRuntime = {
+            $runtimeText.Text = switch ($runtimeBox.SelectedIndex) {
+                1 { "Through Virtual Desktop's streamer, which is started if it is not running. In the headset, connect Virtual Desktop to this PC." }
+                2 { "Through SteamVR, which is started if it is not running: the headset has to be connected to it first. Not tested with this game yet." }
+                default { "Whichever runtime the PC has set as its OpenXR runtime (Virtual Desktop's streamer sets itself when it starts)." }
+            }
+        }
+        $runtimeBox.Add_SelectedIndexChanged($updateRuntime)
+        & $updateRuntime
+
+        # Picture.
+        $picture = New-Card "Picture" 380 92 332 252
+        $form.Controls.Add($picture)
+        [void](New-Label $picture "Resolution of each eye" 18 46 170 20 $cDim 9)
+        $resolutionValue = New-Label $picture "" 188 46 126 20 $cAccent 9.5 "Segoe UI Semibold" "TopRight"
+        $current = 0
+        [void][int]::TryParse((Setting "eye_width" "$defaultWidth"), [ref]$current)
+        $index = [array]::IndexOf($widths, $current)
+        if ($index -lt 0) { $index = [array]::IndexOf($widths, $defaultWidth) }
+        $resolution = New-Slider $picture 0 ($widths.Count - 1) $index 18 66 296
+        $resolutionText = New-Label $picture "" 18 100 296 48 $cDim 8.5
+        $update = {
+            $w = $widths[$resolution.Value]
+            $h = EyeHeight $w
+            $times = ($w * $h) / (1152.0 * 1296.0)
+            $what = if ($w -eq 1152) { "The console's own: the sharpness of the PlayStation 4." } elseif ($w -gt 2048) { "{0:N1} times the pixels of the console's: very demanding, it needs a lot of graphics memory and about {1:N1} GB more memory. Start lower if the game stutters." -f $times, (($times - 1) * 0.64) } else { "{0:N2} times the pixels of the console's: more work for the graphics card, and more memory. Start lower if the game stutters." -f $times }
+            $resolutionValue.Text = "$w x $h"
+            $resolutionText.Text = $what
+        }
+        $resolution.Add_ValueChanged($update)
+        & $update
+
+        [void](New-Label $picture "Field of view" 18 158 170 20 $cDim 9)
+        $fovValue = New-Label $picture "" 188 158 126 20 $cAccent 9.5 "Segoe UI Semibold" "TopRight"
+        $fovStart = [math]::Max(14, [math]::Min(32, [int]([int](Setting "fov" "120") / 5)))
+        $fov = New-Slider $picture 14 32 $fovStart 18 178 296
+        $fovText = New-Label $picture "" 18 212 296 34 $cDim 8.5
+        $ofPsvr = (Setting "fov_of" "psvr") -eq "psvr"
+        $updateFov = {
+            $percent = $fov.Value * 5
+            $fovValue.Text = "$percent%"
+            if ($percent -eq 100) {
+                $fovText.Text = $(if ($ofPsvr) { "PlayStation VR's own view." } else { "All that the headset shows." })
+            } elseif ($percent -eq 120 -and $ofPsvr) {
+                $fovText.Text = "The smoothest picture, no borders (the corners are black)."
+            } elseif ($percent -eq 155 -and $ofPsvr) {
+                $fovText.Text = "The Quest 3's own: no lens corners in view."
+            } elseif ($percent -gt 100) {
+                $fovText.Text = "The game draws a wider view: softer picture, no border."
+            } else {
+                $fovText.Text = "Sharper, with a dark border."
+            }
+        }
+        $fov.Add_ValueChanged($updateFov)
+        & $updateFov
+
+        # Picture quality.
+        $quality = New-Card "Picture quality" 24 278 332 248
+        $form.Controls.Add($quality)
+        $anisoKeys = @("0", "2", "4", "8", "16")
+        $anisoNames = @("Off (as the game draws)", "2x", "4x", "8x", "16x (recommended)")
+        [void](New-Label $quality "Sharper textures (anisotropic)" 18 46 296 20 $cDim 9)
+        $anisoBox = New-Dropdown $quality $anisoNames (Find-Nearest ([double[]]$anisoKeys) (Read-Number "aniso" 16)) 18 66 296
+        $tips.SetToolTip($anisoBox, "Keeps floors and walls seen at a slant sharp instead of blurred. Costs a little of the graphics card's time.")
+
+        $fxaaKeys = @("0", "0.35", "0.65", "1")
+        $fxaaNames = @("Off", "Light", "Normal (recommended)", "Strong")
+        [void](New-Label $quality "Smooth edges (FXAA)" 18 112 296 20 $cDim 9)
+        $fxaaBox = New-Dropdown $quality $fxaaNames (Find-Nearest ([double[]]$fxaaKeys) (Read-Number "fxaa" 0.65)) 18 132 296
+        $tips.SetToolTip($fxaaBox, "Smooths the jagged edges of the picture on its way to the headset. A larger resolution of each eye does it best.")
+
+        $maskKeys = @("0", "0.94", "0.97", "1", "1.05")
+        $maskNames = @("Off: the coloured corners show", "Tighter (0.94)", "Tight (0.97)", "On (1.0): black corners", "Loose (1.05)")
+        [void](New-Label $quality "Black corners (mask)" 18 178 296 20 $cDim 9)
+        $maskBox = New-Dropdown $quality $maskNames (Find-Nearest ([double[]]$maskKeys) (Read-Number "mask" 1)) 18 198 296
+        $tips.SetToolTip($maskBox, "Black instead of the coloured corners outside the lens circles. Tighter or Tight if some colour is left at the edge; Loose if the picture's edge is cut off.")
+
+        # Frame rate.
+        $rate = New-Card "Frame rate" 380 360 332 166
+        $form.Controls.Add($rate)
+        $targetKeys = @("0", "30", "35", "40", "45", "50", "60")
+        $targetNames = @("Original timing (the game's own pace)", "30 a second", "35 a second", "40 a second (steady at 80 Hz)", "45 a second (steady at 90 Hz)", "50 a second", "60 a second (recommended, 120 Hz)")
+        $targetBox = New-Dropdown $rate $targetNames (Find-Nearest ([double[]]$targetKeys) (Read-Number "target_fps" 60)) 18 46 296
+        [void](New-Label $rate "The emulator holds the game to this rate. 60 is the game's own and looks smoothest with Virtual Desktop's frame rate at 120 (Streaming tab); at 90 or 80 use 45 or 40. Lower is steadier on a slower PC." 18 90 296 66 $cDim 8.5)
+
+        # Bottom row.
+        $neo = New-Object RushUi.Toggle
+        $neo.Text = "PS4 Pro mode (sharper textures)"
+        $neo.Checked = Get-NeoMode
+        $neo.SetBounds(24, 540, 380, 26)
+        $form.Controls.Add($neo)
+        $tips.SetToolTip($neo, "The game is told it runs on a PlayStation 4 Pro, which gives sharper textures. Takes effect as the game starts.")
+        $again = New-Object RushUi.Toggle
+        $again.Text = "Show this window at every start"
+        $again.Checked = (Setting "menu" "1") -ne "0"
+        $again.SetBounds(24, 570, 380, 26)
+        $form.Controls.Add($again)
+
+        $play = New-Object RushUi.FlatButton
+        $play.Text = "Play"
+        $play.Primary = $true
+        $play.SetBounds(592, 548, 120, 40)
+        $play.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Controls.Add($play)
+        $form.AcceptButton = $play
+        $quit = New-Object RushUi.FlatButton
+        $quit.Text = "Quit"
+        $quit.SetBounds(476, 548, 104, 40)
+        $quit.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $form.Controls.Add($quit)
+        $form.CancelButton = $quit
+
+        [RushUi.Theme]::DarkTitleBar($form)
+    } catch {
+        Say ("The new window could not be built (" + $_.Exception.Message + "); the plain window is used.") "Yellow"
+        return
+    }
+
+    $result = Show-Form $form
+    if ($result -ne [System.Windows.Forms.DialogResult]::OK) { $script:menuOutcome = "quit"; return }
+    Save-Setting "runtime" ($runtimeKeys[$runtimeBox.SelectedIndex])
+    Save-Setting "eye_width" ($widths[$resolution.Value])
+    Save-Setting "aniso" ($anisoKeys[$anisoBox.SelectedIndex])
+    Save-Setting "fxaa" ($fxaaKeys[$fxaaBox.SelectedIndex])
+    Save-Setting "mask" ($maskKeys[$maskBox.SelectedIndex])
+    Save-Setting "target_fps" ($targetKeys[$targetBox.SelectedIndex])
+    Save-Setting "fov" ($fov.Value * 5)
+    Save-Setting "menu" ($(if ($again.Checked) { "1" } else { "0" }))
+    Set-NeoMode $neo.Checked
+    Read-Settings
+    $script:menuOutcome = "play"
+}
+
+# True to go on and play, false to quit.
+function Show-Menu {
+    Enable-ModernUi
+    if ($script:modernUi) {
+        $script:menuOutcome = "plain"
+        $null = Show-MenuModern
+        if ($script:menuOutcome -eq "play") { return $true }
+        if ($script:menuOutcome -eq "quit") { return $false }
+    }
+    return (Show-MenuClassic)
 }
 
 $emulator = Join-Path $here "shadps4.exe"
@@ -763,8 +1638,13 @@ $mask = 0.0
 if (-not [double]::TryParse((Setting "mask" "1"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$mask)) { $mask = 1.0 }
 $mask = [math]::Max(0.0, [math]::Min(2.0, $mask))
 if ($mask -gt 0) { $env:SHADPS4_VR_MASK = $mask.ToString([System.Globalization.CultureInfo]::InvariantCulture) }
-# fxaa: smoothing of the picture's edges (0 off, up to 1). The game draws without multisampling, so
-# msaa and antialias have nothing to work on here.
+# aniso: anisotropic filtering of the game's textures (0 as the game draws them, 2 to 16).
+$aniso = 16
+if (-not [int]::TryParse((Setting "aniso" "16"), [ref]$aniso)) { $aniso = 16 }
+$aniso = [math]::Max(0, [math]::Min(16, $aniso))
+$env:SHADPS4_FORCE_ANISO = "$aniso"
+# fxaa: smoothing of the picture's edges on its way to the headset (0 off, up to 1). The game
+# draws without multisampling, so msaa and antialias have nothing to work on here; this does.
 $fxaa = 0.65
 if (-not [double]::TryParse((Setting "fxaa" "0.65"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$fxaa)) { $fxaa = 0.65 }
 $fxaa = [math]::Max(0.0, [math]::Min(1.0, $fxaa))
@@ -784,6 +1664,11 @@ if ((Setting "fov_of" "psvr") -ne "psvr") { $env:SHADPS4_VR_FOV_OF = "headset" }
 # fps: the most frames a second. (pace, the older way to say it: refreshes of the headset a
 # frame is given, 1 or more.)
 $env:SHADPS4_VR_FPS_CAP = Setting "fps" "60"
+# target_fps: the rate the emulator steers the game to (20 to 60), by changing how often it tells
+# the game the headset has refreshed; 0 leaves the game's own timing.
+$target = 60
+if (-not [int]::TryParse((Setting "target_fps" "60"), [ref]$target)) { $target = 60 }
+if ($target -ge 20) { $env:SHADPS4_VR_TARGET_FPS = "$([math]::Min(60, $target))" }
 $pace = Setting "pace" ""
 if ($pace -eq "1") { $env:SHADPS4_VR_FASTEST_PACE = "1"; $env:SHADPS4_VR_FPS_CAP = "" } elseif ($pace -ne "" -and $pace -ne "2") { $env:SHADPS4_VR_PACE = $pace }
 if ((Setting "headset" "1") -eq "0") { $env:SHADPS4_OPENXR = "0" }

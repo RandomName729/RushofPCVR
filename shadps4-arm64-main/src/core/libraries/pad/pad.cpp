@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+#include <cstdlib>
 #include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "common/singleton.h"
@@ -418,6 +420,10 @@ int PS4_SYSV_ABI scePadOutputReport() {
 int ProcessStates(s32 handle, OrbisPadData* pData, Input::GameController& controller,
                   Input::State* states, s32 num, bool connected, u32 connected_count) {
     if (!connected) {
+        static std::atomic<int> not_connected_logged{0};
+        if (not_connected_logged.fetch_add(1) < 5) {
+            LOG_INFO(Lib_Pad, "game's pad state: handle {} is not connected", handle);
+        }
         pData[0] = {};
         pData[0].orientation = {0.0f, 0.0f, 0.0f, 1.0f};
         pData[0].connected = false;
@@ -425,6 +431,21 @@ int ProcessStates(s32 handle, OrbisPadData* pData, Input::GameController& contro
     }
 
     const bool gamepad_input_intercepted = ImGui::Core::IsGamepadInputCaptured();
+    static const bool pad_log = std::getenv("SHADPS4_PAD_LOG") != nullptr;
+    if (pad_log) {
+        // DIAGNOSTIC (SHADPS4_PAD_LOG=1): what the game is given, when it changes (first 300).
+        static std::atomic<int> logged{0};
+        static std::atomic<bool> last_intercepted{false};
+        static std::atomic<u32> last_buttons{0};
+        const u32 buttons = num > 0 ? static_cast<u32>(states[0].buttonsState) : 0;
+        if ((gamepad_input_intercepted != last_intercepted.load() || buttons != last_buttons.load()) &&
+            logged.fetch_add(1) < 300) {
+            LOG_INFO(Lib_Pad, "game's pad state: handle {} buttons {:#x}{}", handle, buttons,
+                     gamepad_input_intercepted ? " (taken by the emulator's own overlay: the game sees nothing)" : "");
+        }
+        last_intercepted = gamepad_input_intercepted;
+        last_buttons = buttons;
+    }
     for (int i = 0; i < num; i++) {
         if (gamepad_input_intercepted) {
             pData[i] = {};

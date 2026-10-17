@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/texture_cache/sampler.h"
@@ -11,12 +12,29 @@ namespace VideoCore {
 Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sampler,
                  const AmdGpu::BorderColorBuffer border_color_base) {
     using namespace Vulkan;
-    const bool anisotropy_enable = instance.IsAnisotropicFilteringSupported() &&
-                                   (AmdGpu::IsAnisoFilter(sampler.xy_mag_filter) ||
-                                    AmdGpu::IsAnisoFilter(sampler.xy_min_filter));
-    const float max_anisotropy =
+    // SHADPS4_FORCE_ANISO=<2 to 16> (default 16, 0 or 1 = as the title asks): samplers that
+    // filter linearly (and are not for shadow comparisons) are made anisotropic even where the
+    // title did not ask for it. Surfaces seen at a slant (walls of a corridor, the floor) are
+    // otherwise sampled from a mip that is blurred along the way they are seen, which is what
+    // makes a title that was made for trilinear filtering look soft in a headset.
+    static const float forced_anisotropy = [] {
+        const char* value = std::getenv("SHADPS4_FORCE_ANISO");
+        return value != nullptr ? static_cast<float>(std::atof(value)) : 16.0f;
+    }();
+    bool anisotropy_enable = instance.IsAnisotropicFilteringSupported() &&
+                             (AmdGpu::IsAnisoFilter(sampler.xy_mag_filter) ||
+                              AmdGpu::IsAnisoFilter(sampler.xy_min_filter));
+    float max_anisotropy =
         anisotropy_enable ? std::clamp(sampler.MaxAniso(), 1.0f, instance.MaxSamplerAnisotropy())
                           : 1.0f;
+    if (forced_anisotropy > 1.0f && instance.IsAnisotropicFilteringSupported() &&
+        sampler.depth_compare_func == AmdGpu::DepthCompare::Never &&
+        LiverpoolToVK::Filter(sampler.xy_mag_filter) == vk::Filter::eLinear &&
+        LiverpoolToVK::Filter(sampler.xy_min_filter) == vk::Filter::eLinear) {
+        anisotropy_enable = true;
+        max_anisotropy = std::max(
+            max_anisotropy, std::min(forced_anisotropy, instance.MaxSamplerAnisotropy()));
+    }
     auto border_color = LiverpoolToVK::BorderColor(sampler.border_color_type);
     if (border_color == vk::BorderColor::eFloatCustomEXT &&
         !instance.IsCustomBorderColorSupported()) {

@@ -2,10 +2,12 @@
 // the stall watchdog can print it. Header only.
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -20,7 +22,37 @@ namespace Core::GuestCpu {
 void* CaptureCurrentThreadHandle();
 std::string DescribeThreadContext(void* native_handle);
 
+// Where a thread spends its blocked time: per wait site (what + calling guest address), kept per
+// thread and written only by that thread. Read by TopSites() for the frame statistics.
+struct GuestWaitSite {
+    std::atomic<const char*> what{nullptr};
+    std::atomic<const void*> caller{nullptr};
+    std::atomic<u64> count{0};
+    std::atomic<u64> ns{0};
+    u64 reported_ns{0}; // only touched by the reporter
+    u64 reported_count{0};
+};
+
 struct GuestWaitSlot {
+    static constexpr size_t SiteCount = 64;
+    GuestWaitSite sites[SiteCount];
+    void NoteSite(const char* w, const void* c, s64 ns) {
+        const auto h = (reinterpret_cast<std::uintptr_t>(c) * 0x9E3779B97F4A7C15ull) >> 58;
+        for (size_t i = 0; i < 8; ++i) {
+            GuestWaitSite& site = sites[(h + i) % SiteCount];
+            const void* cur = site.caller.load(std::memory_order_relaxed);
+            if (cur == nullptr) {
+                site.what.store(w, std::memory_order_relaxed);
+                site.caller.store(c, std::memory_order_relaxed);
+                cur = c;
+            }
+            if (cur == c && site.what.load(std::memory_order_relaxed) == w) {
+                site.count.fetch_add(1, std::memory_order_relaxed);
+                site.ns.fetch_add(static_cast<u64>(ns), std::memory_order_relaxed);
+                return;
+            }
+        }
+    }
     std::string thread_name;
     void* native_handle{nullptr};
     std::atomic<const char*> what{nullptr}; // non-null while the thread is inside a traced wait
@@ -39,6 +71,15 @@ inline s64 GuestWaitNowNs() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
                std::chrono::steady_clock::now().time_since_epoch())
         .count();
+}
+
+// The per-site accounting is only for the frame statistics (SHADPS4_FRAME_STATS).
+inline bool GuestWaitStatsOn() {
+    static const bool on = [] {
+        const char* value = std::getenv("SHADPS4_FRAME_STATS");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return on;
 }
 
 inline std::string GuestWaitCaller(const void* p) {
@@ -62,6 +103,52 @@ public:
     GuestWaitSlot& Slot() {
         thread_local GuestWaitSlot* slot = Register();
         return *slot;
+    }
+
+    // For the frame statistics: the threads that were blocked for a noticeable part of the last
+    // `seconds`, and the wait sites they spent it at.
+    std::string TopSites(double seconds) {
+        std::string out;
+        std::scoped_lock lock{mutex};
+        for (const auto& s : slots) {
+            struct Row {
+                u64 ns, count;
+                const char* what;
+                const void* caller;
+            };
+            std::vector<Row> rows;
+            u64 total = 0;
+            for (auto& site : s->sites) {
+                const u64 ns = site.ns.load(std::memory_order_relaxed);
+                const u64 count = site.count.load(std::memory_order_relaxed);
+                if (ns > site.reported_ns) {
+                    rows.push_back({ns - site.reported_ns, count - site.reported_count,
+                                    site.what.load(), site.caller.load()});
+                    total += ns - site.reported_ns;
+                }
+                site.reported_ns = ns;
+                site.reported_count = count;
+            }
+            if (static_cast<double>(total) < seconds * 1e9 * 0.05) {
+                continue;
+            }
+            std::sort(rows.begin(), rows.end(),
+                      [](const Row& x, const Row& y) { return x.ns > y.ns; });
+            char head[160];
+            std::snprintf(head, sizeof(head), "  [%s] blocked %.0f%% of the time:",
+                          s->thread_name.c_str(), static_cast<double>(total) / (seconds * 1e7));
+            out += head;
+            for (size_t i = 0; i < rows.size() && i < 4; ++i) {
+                char part[200];
+                std::snprintf(part, sizeof(part), " %s from %s %.0f ms (%llu waits);", rows[i].what,
+                              GuestWaitCaller(rows[i].caller).c_str(),
+                              static_cast<double>(rows[i].ns) / 1e6,
+                              static_cast<unsigned long long>(rows[i].count));
+                out += part;
+            }
+            out += "\n";
+        }
+        return out;
     }
 
     std::string Dump() {
@@ -129,10 +216,14 @@ struct ScopedGuestWait {
 
     ~ScopedGuestWait() {
         if (--slot.depth == 0) {
+            const s64 end_ns = GuestWaitNowNs();
             slot.last_what.store(slot.what.load());
             slot.last_caller.store(slot.caller.load());
-            slot.last_end_ns.store(GuestWaitNowNs());
+            slot.last_end_ns.store(end_ns);
             slot.count.fetch_add(1);
+            if (GuestWaitStatsOn()) {
+                slot.NoteSite(slot.what.load(), slot.caller.load(), end_ns - slot.since_ns.load());
+            }
             slot.what.store(nullptr);
         }
     }

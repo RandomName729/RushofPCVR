@@ -14,26 +14,28 @@ depth buffers, its timing and resolution).
 
 ## Status
 
-**Early work in progress**, built and tested by one person on one PC and one Quest 3.
+**Early work in progress** (version 0.3.0), built and tested by one person on one PC and one Quest 3.
+See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 
 - The title screen, the intro and **levels 1 to 4** play through (the tester went as far as level
-  4; later levels are untested). There are still visual glitches in the levels: skybox, some
-  textures and parts of the interface.
+  4; later levels are untested).
 - Controls: the **DualSense** is the controller (buttons, sticks, touchpad, motion sensors). The
   headset's own controllers do not play the game, and the PlayStation Move controllers are not
   supported in this version.
-- Performance: on a high-end laptop (Core i9-14900HX, GeForce RTX 4080 Laptop) level 1 runs at about
-  22 to 29 frames a second where the console runs 60. The headset keeps showing 90 pictures a second
-  by turning the picture to follow your head, but the game itself is slower than it should be.
-  Performance is the current main task.
+- Speed: with Virtual Desktop at 120 Hz the game is held to 60 frames a second and, on a high-end
+  laptop (Core i9-14900HX, GeForce RTX 4080 Laptop) at 2304 pixels an eye, ran at a median of about
+  50 in level 1, mostly between 43 and 60. The game keeps its console speed: the captions stay with
+  the voice. Heavy scenes still dip, and the game can freeze for a second or more now and then.
 - Sharpness: the console draws each eye at 1152 x 1296 pixels, and a Quest 3 shows that over a wide
   view, so the picture looks soft at that size. The `eye_width` setting (a slider in the start-up
-  window) makes the game draw larger, up to 2880 x 3240 an eye. This is little tested: it
-  costs graphics-card time and memory, and it may show problems at some sizes. The coloured
-  corners around the game's two lens circles are blacked out (`mask`), so the field of view can
-  stay at 120 for the smoothest picture without borders, and `fxaa` smooths the edges.
-- Known picture problems: a few textures are wrong (a clean picture of another texture), and the
-  effects that read the depth buffer as a colour are shaded differently from the console.
+  window) makes the game draw larger, up to 2880 x 3240 an eye; it costs graphics-card time and
+  memory. The coloured corners around the game's two lens circles are blacked out (`mask`), so the
+  field of view can stay at 120 for the smoothest picture without borders; `fxaa` smooths the
+  edges and `aniso` keeps slanted textures sharp. **The picture can still look pixelated or soft in
+  the headset**, especially in dark scenes: this is being worked on.
+- Known picture problems: the effects that read the depth buffer as a colour are shaded
+  differently from the console, and textures whose largest level has not loaded are shown one
+  level lower (a little softer).
 - Expect rough edges, and please report what you find (see "If something does not work").
 
 ## What you need
@@ -70,8 +72,8 @@ depth buffers, its timing and resolution).
 4. **Connect the DualSense to the PC.**
 5. **Connect to the PC with Virtual Desktop**, then start **`Play Rush of Blood (DualSense).bat`**
    on the desktop you see in the headset. A small window lets you choose the headset connection (Virtual Desktop
-   or SteamVR), the resolution, the field of view, edge smoothing and the corner mask; Play
-   starts the game, and the headset switches to it after a few seconds.
+   or SteamVR), the resolution, the field of view, texture sharpness, edge smoothing, the corner
+   mask, the frame rate and PS4 Pro mode; Play starts the game, and the headset switches to it after a few seconds.
 6. In the game's own start-up question, choose the **DualShock** controller, not the Move
    controllers.
 
@@ -90,6 +92,8 @@ ignored, and each setting is explained in the file itself. The ones to know:
 | `fov_of` | What that percent is of: `psvr` (a PlayStation VR's own view, the default) or `headset`. |
 | `runtime` | Which OpenXR runtime the game uses: `pc` (the one the PC has set up, the default), `virtualdesktop`, `steamvr`, or the full path of a runtime's `.json` file. Also in the start-up window. |
 | `eye_width` | The width in pixels each eye is drawn at, 1152 to 2880 (the default is 1152). 1152 is what the console draws; larger is sharper in the headset, and slower, and takes more memory. |
+| `target_fps` | The frame rate the game is held to, 20 to 60 (0 leaves the game's own timing). **60 is the default**, steady with Virtual Desktop at 120 Hz; use 45 at 90 Hz and 40 at 80 Hz. Also in the start-up window ("Aim for"). |
+| `aniso` | Anisotropic filtering of the game's textures: 0 (as the game draws them), 2, 4, 8 or 16 (default). Also in the start-up window. |
 | `fxaa` | Smooths the picture's edges on its way to the headset: 0 off, 0.35 light, 0.65 normal (default), 1 strong. Also in the start-up window. |
 | `msaa`, `antialias` | Multisampling limits for games that use it. Rush of Blood draws without multisampling, so they change nothing here; use `fxaa` and a larger `eye_width` instead. |
 | `sharpen` | Sharpening of the picture on its way to the headset, 0 to 1. |
@@ -109,12 +113,14 @@ versions is no longer read: it is `eye_width` now.)
   shows something else (Virtual Desktop's view of the desktop, for one). Put the headset on and
   make sure Virtual Desktop is streaming; `pause=0` stops the waiting.
 - **The picture looks soft or pixelated**: the console draws each eye at only 1152 x 1296 pixels.
-  Raise `eye_width` (the slider in the start-up window; 1152 is the default, 2880 the largest). A
+  Raise `eye_width` (the slider in the start-up window; 1152 is the default, 2880 the largest), keep
+  "PS4 Pro mode" on, and in Virtual Desktop try a higher bitrate and HEVC 10-bit or AV1. A
   smaller `fov` (100 is the game's own view) puts the same pixels over fewer degrees: sharper, with a
   dark border. `sharpen` can be raised a little.
 - **Four circles in the PC window**: the picture the game draws holds one circle for each eye;
   the window now shows that picture once (two circles). A Quest shows one circle in each eye.
-- **Slow**: lower `eye_width` (1152 is the console's size) or `fxaa`. To see where the time goes, add the line
+- **Slow or stuttering**: lower `eye_width` (1152 is the console's size), and set "Aim for" to half
+  of Virtual Desktop's frame rate (60 at 120 Hz, 45 at 90 Hz, 40 at 80 Hz). To see where the time goes, add the line
   `env=SHADPS4_FRAME_STATS=1` to `settings.txt` and play for a minute: the log then gets a line
   every five seconds with draws and render passes per frame, how long the emulator waits for the
   graphics card, and how busy each thread is.

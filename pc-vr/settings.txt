@@ -18,6 +18,13 @@
 # Desktop sets (Streaming > Frame rate).
 #fps=60
 
+# The frame rate the game is held to, 20 to 60 (0 = the game's own timing, 19 to 26 a second in
+# busy scenes). The emulator changes how often the game is told the headset has refreshed until
+# the game runs at this rate; the window sets it. 60 is the game's own rate and the default:
+# it is even with Virtual Desktop's frame rate at 120 (Streaming tab); use 45 at 90 and 40 at 80.
+# Anything above what the PC can do just means as fast as it can.
+#target_fps=60
+
 # How much of the headset's field of view the game draws, in percent, 70 to 160: at 100 the
 # picture fills all that the headset shows; less puts the same pixels over fewer degrees, a
 # sharper picture with a dark border where the rest was; more draws a wider view (softer, and
@@ -43,6 +50,16 @@
 # corners showing. 1 = the circles as drawn, 0 = off. If the picture's edge gets cut off, give
 # a bit more (1.05); if some colour is left at the edge, a bit less (0.97).
 #mask=1
+
+# Anisotropic filtering of the game's textures, 0 (as the game draws them), 2, 4, 8 or 16. It
+# keeps walls and floors seen at a slant sharp instead of blurred; costs a little of the graphics
+# card's time. (The window sets it.)
+#aniso=16
+
+# Smooths the edges of the picture on its way to the headset (an FXAA pass): 0 off, 0.35 light,
+# 0.65 normal (the default), 1 strong. Rush of Blood draws without multisampling, so this is
+# what smooths its edges; a bigger eye_width (supersampling) does it best. (The window sets it.)
+#fxaa=0.65
 
 # Which OpenXR runtime the game uses (also in the start-up window): pc, the one the PC has set
 # up (when Virtual Desktop's streamer was the last to set itself, that one); virtualdesktop,

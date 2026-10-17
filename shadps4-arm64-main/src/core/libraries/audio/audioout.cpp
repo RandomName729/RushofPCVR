@@ -26,6 +26,10 @@
 #include "core/libraries/libs.h"
 #include "core/vr/vr_runtime.h"
 
+namespace Libraries::Kernel {
+void ApiCallNote(const char* name);
+}
+
 namespace Libraries::AudioOut {
 
 // Port table with shared_ptr - use std::shared_mutex for RW locking
@@ -680,6 +684,7 @@ s32 PS4_SYSV_ABI sceAudioOutGetPortState(s32 handle, OrbisAudioOutPortState* sta
 }
 
 s32 PS4_SYSV_ABI sceAudioOutOutput(s32 handle, void* ptr) {
+    Kernel::ApiCallNote(GetPortType(handle) == 0 ? "sceAudioOutOutput(main port)" : "sceAudioOutOutput(other port)");
     LOG_TRACE(Lib_AudioOut, "(STUBBED) called, handle={:#x}, ptr={}", handle, fmt::ptr(ptr));
 
     if (lazy_init.load(std::memory_order_relaxed) == 0 || audio == nullptr) {
@@ -735,6 +740,7 @@ s32 PS4_SYSV_ABI sceAudioOutOutput(s32 handle, void* ptr) {
 }
 
 s32 PS4_SYSV_ABI sceAudioOutOutputs(OrbisAudioOutOutputParam* param, u32 num) {
+    Kernel::ApiCallNote("sceAudioOutOutputs");
     if (param) {
         LOG_TRACE(Lib_AudioOut, "(STUBBED) called, param={}, num={}", fmt::ptr(param), num);
         for (u32 i = 0; i < num; i++) {

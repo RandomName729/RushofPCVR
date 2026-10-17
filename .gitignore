@@ -7,6 +7,8 @@
 !/.gitmodules
 !/.github/
 !/README.md
+!/CHANGELOG.md
+!/RELEASE-NOTES-*.md
 !/LICENSE
 !/THIRD-PARTY-NOTICES.md
 !/run.bat

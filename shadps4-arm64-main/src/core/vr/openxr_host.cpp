@@ -1527,6 +1527,17 @@ struct OpenXrHost::Impl {
     }
 
     bool EnsureSwapchain(u32 width, u32 height) {
+        // SHADPS4_VR_LAYER_SCALE=<0.25 to 1>: hands the runtime pictures this fraction of the
+        // size they are drawn at, scaled down here (with a linear filter: at 0.5 each pixel is
+        // the mean of four) instead of leaving that to the runtime. Where the runtime scales a
+        // large picture down to the size of its stream with a cheap filter, the result looks
+        // blocky however large the picture was drawn.
+        static const float layer_scale =
+            std::clamp(EnvFloat("SHADPS4_VR_LAYER_SCALE", 1.0f), 0.25f, 1.0f);
+        if (layer_scale < 0.999f) {
+            width = std::max(2u, (static_cast<u32>(static_cast<float>(width) * layer_scale) + 1u) & ~1u);
+            height = std::max(2u, static_cast<u32>(static_cast<float>(height) * layer_scale));
+        }
         if (max_swapchain_width != 0) {
             width = std::min(width, max_swapchain_width);
         }

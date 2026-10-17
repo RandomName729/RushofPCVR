@@ -5,6 +5,8 @@
 #include <cstring>
 #include <map>
 #include <ranges>
+#include <thread>
+#include <chrono>
 #include <vector>
 #include <magic_enum/magic_enum.hpp>
 
@@ -74,6 +76,14 @@ static std::map<std::string, FactoryDevice> available_device = {
     {"/dev/rng",      &D::RngDevice::Create },
     // clang-format on
 };
+
+namespace VideoCore {
+void TexAuditNoteWrite(u64 dst, u64 bytes, u64 src, bool is_copy);
+void TexAuditNoteRead(u64 dst, u64 bytes, u64 file_offset, u64 file_size,
+                      const std::string& path);
+void StageGuardBeforeRead(u64 dst, u64 bytes, const std::string& path);
+void StageGuardAfterRead(u64 dst, u64 bytes, const std::string& path);
+}
 
 namespace Libraries::Kernel {
 
@@ -383,6 +393,7 @@ s64 ReadFile(Common::FS::IOFile& file, void* buf, u64 nbytes) {
             }
             memory->InvalidateMemory(reinterpret_cast<VAddr>(dst + total), got);
             std::memcpy(dst + total, temp.data(), got);
+            memory->InvalidateMemory(reinterpret_cast<VAddr>(dst + total), got);
             total += got;
             if (got < want) {
                 break;
@@ -395,8 +406,62 @@ s64 ReadFile(Common::FS::IOFile& file, void* buf, u64 nbytes) {
         return static_cast<s64>(total);
     }
 
+    // Texture stream reads wait until the GPU copy of the slot's previous chunk has run.
+    static const bool stage_guard = [] {
+        const char* v = std::getenv("SHADPS4_STAGE_GUARD");
+        return v != nullptr && v[0] == '1';
+    }();
+    const std::string guard_path = stage_guard ? file.GetPath().string() : std::string{};
+    if (stage_guard) {
+        VideoCore::StageGuardBeforeRead(reinterpret_cast<u64>(buf), expected, guard_path);
+    }
     memory->InvalidateMemory(reinterpret_cast<VAddr>(buf), expected);
+    static const bool tex_audit = std::getenv("SHADPS4_DBG_TEX_AUDIT") != nullptr;
+    const s64 file_offset = tex_audit ? static_cast<s64>(file.Tell()) : 0;
     const s64 got = file.ReadRaw<u8>(buf, nbytes);
+    {
+        // SHADPS4_STREAM_MBPS=<n> / SHADPS4_STREAM_LATENCY_US=<n>: diagnostic. Stream file reads on
+        // the console take milliseconds (disc/hard drive); here they finish instantly, which can
+        // expose races in the game's streaming code. These make reads of the streams folder as
+        // slow as a drive: n MB/s and a fixed latency per read.
+        static const double mbps = [] {
+            const char* v = std::getenv("SHADPS4_STREAM_MBPS");
+            return v != nullptr ? std::atof(v) : 0.0;
+        }();
+        static const s64 latency_us = [] {
+            const char* v = std::getenv("SHADPS4_STREAM_LATENCY_US");
+            return v != nullptr ? std::atoll(v) : s64{0};
+        }();
+        if ((mbps > 0.0 || latency_us > 0) && got > 0) {
+            const std::string p = file.GetPath().string();
+            if (p.find("streams") != std::string::npos) {
+                s64 us = latency_us;
+                if (mbps > 0.0) {
+                    us += static_cast<s64>(static_cast<double>(got) / (mbps * 1048576.0) * 1e6);
+                }
+                if (us > 0) {
+                    std::this_thread::sleep_for(std::chrono::microseconds{us});
+                }
+            }
+        }
+    }
+    if (stage_guard && got > 0) {
+        VideoCore::StageGuardAfterRead(reinterpret_cast<u64>(buf), static_cast<u64>(got),
+                                       guard_path);
+    }
+    if (tex_audit && got > 0) {
+        VideoCore::TexAuditNoteRead(reinterpret_cast<u64>(buf), static_cast<u64>(got),
+                                    static_cast<u64>(file_offset),
+                                    static_cast<u64>(file.GetSize()), file.GetPath().string());
+    }
+    // The GPU thread runs while the game streams data in. If it looked at the range between the
+    // invalidation above and the end of the read, it uploaded a half written texture and marked
+    // it clean again, and nothing would tell it that the rest arrived later. Invalidate once more
+    // now that the data is complete (SHADPS4_NO_POST_INVALIDATE=1 turns this off).
+    static const bool post_invalidate = std::getenv("SHADPS4_NO_POST_INVALIDATE") == nullptr;
+    if (post_invalidate && got > 0) {
+        memory->InvalidateMemory(reinterpret_cast<VAddr>(buf), static_cast<u64>(got));
+    }
     if (got >= 0 && static_cast<u64>(got) < expected) {
         LOG_WARNING(Kernel_Fs, "ReadFile short read: wanted {:#x} got {:#x} at {:p}", expected,
                     static_cast<u64>(got), buf);

@@ -5,6 +5,7 @@
 #include <mutex>
 
 #include "common/assert.h"
+#include "core/guest_cpu/guest_wait_trace.h"
 #include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "core/emulator_settings.h"
@@ -17,6 +18,10 @@
 #include "video_core/renderer_vulkan/vk_presenter.h"
 
 extern std::unique_ptr<Vulkan::Presenter> presenter;
+
+namespace Libraries::Kernel {
+void ApiCallNote(const char* name);
+}
 
 namespace Libraries::VideoOut {
 
@@ -151,6 +156,7 @@ s32 PS4_SYSV_ABI sceVideoOutSetFlipRate(s32 handle, s32 rate) {
 }
 
 s32 PS4_SYSV_ABI sceVideoOutIsFlipPending(s32 handle) {
+    Kernel::ApiCallNote("sceVideoOutIsFlipPending");
     LOG_TRACE(Lib_VideoOut, "called");
     auto* port = driver->GetPort(handle);
     std::unique_lock lock{port->port_mutex};
@@ -259,6 +265,7 @@ s32 PS4_SYSV_ABI sceVideoOutGetEventCount(const Kernel::OrbisKernelEvent* ev) {
 }
 
 s32 PS4_SYSV_ABI sceVideoOutGetFlipStatus(s32 handle, FlipStatus* status) {
+    Kernel::ApiCallNote("sceVideoOutGetFlipStatus");
     if (!status) {
         LOG_ERROR(Lib_VideoOut, "Flip status is null");
         return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
@@ -286,6 +293,7 @@ s32 PS4_SYSV_ABI sceVideoOutGetFlipStatus(s32 handle, FlipStatus* status) {
 }
 
 s32 PS4_SYSV_ABI sceVideoOutGetVblankStatus(int handle, SceVideoOutVblankStatus* status) {
+    Kernel::ApiCallNote("sceVideoOutGetVblankStatus");
     if (status == nullptr) {
         return ORBIS_VIDEO_OUT_ERROR_INVALID_ADDRESS;
     }
@@ -429,6 +437,8 @@ s32 PS4_SYSV_ABI sceVideoOutGetDeviceCapabilityInfo(
 }
 
 s32 PS4_SYSV_ABI sceVideoOutWaitVblank(s32 handle) {
+    Kernel::ApiCallNote("sceVideoOutWaitVblank");
+    GUEST_WAIT("sceVideoOutWaitVblank", handle, 0);
     auto* port = driver->GetPort(handle);
     if (!port) {
         return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;

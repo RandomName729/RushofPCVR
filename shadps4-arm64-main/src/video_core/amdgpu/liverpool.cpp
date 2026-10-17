@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <thread>
 
@@ -35,7 +37,107 @@ namespace AmdGpu {
 
 // Label writes of the guest used to be logged here while the game's freeze was being tracked
 // down. Kept as a no-op so the call sites stay in place; nothing is logged any more.
-static void TraceLabelWrite(const char*, const void*, u64) {}
+static void TraceLabelWrite(const char*, const void*, u64);
+
+// SHADPS4_DBG_TEX_AUDIT: every DMA_DATA packet that reads or writes system memory, with where it
+// lands (the streamed texture pool or elsewhere). These are done by the buffer cache on GPU
+// copies of the data, so guest memory may not see them.
+static void DmaAudit(const char* queue, u32 src_sel, u32 dst_sel, u64 dst, u64 src, u64 bytes,
+                     u64 data) {
+    static const bool audit = std::getenv("SHADPS4_DBG_TEX_AUDIT") != nullptr;
+    if (!audit) {
+        return;
+    }
+    constexpr u64 pool_begin = 0x100f200000ULL;
+    constexpr u64 pool_end = pool_begin + 0x7b6d0000ULL;
+    static std::atomic<u32> count{0};
+    static std::atomic<u64> total_bytes{0};
+    static std::atomic<u32> in_pool{0};
+    const u32 n = count.fetch_add(1) + 1;
+    total_bytes.fetch_add(bytes);
+    const bool dst_pool = dst >= pool_begin && dst < pool_end;
+    const bool src_pool = src >= pool_begin && src < pool_end;
+    if (dst_pool || src_pool) {
+        in_pool.fetch_add(1);
+    }
+    if (n <= 80 || dst_pool || (n % 1000) == 0) {
+        static std::atomic<u32> pool_logged{0};
+        if (!dst_pool || pool_logged.fetch_add(1) < 200) {
+            LOG_WARNING(Render_Vulkan,
+                        "TEXAUDIT: DMA_DATA #{} on {}: src_sel={} dst_sel={} dst={:#x} src={:#x} "
+                        "data={:#x} bytes={:#x}{}{} (total {} packets, {} touch the pool, {} MiB)",
+                        n, queue, src_sel, dst_sel, dst, src, data, bytes,
+                        dst_pool ? " DESTINATION IN THE TEXTURE POOL" : "",
+                        src_pool ? " SOURCE IN THE TEXTURE POOL" : "", n, in_pool.load(),
+                        total_bytes.load() >> 20);
+        }
+    }
+}
+
+// SHADPS4_LABEL_TRACE=1 logs what happens to the game's label slots (first 0x80 bytes of its
+// pool at 0x250800000): every change of a slot's value (seen by a polling thread, so by whoever
+// wrote it: the game, a PM4 packet or our own forced release) and every graphics wait on one,
+// with times. =2 also stops the forced release from writing the awaited value, so a clear by
+// the game shows up on its own.
+static int LabelTraceMode() {
+    static const int mode = [] {
+        const char* value = std::getenv("SHADPS4_LABEL_TRACE");
+        return value == nullptr ? 0 : std::atoi(value);
+    }();
+    return mode;
+}
+static const auto label_trace_t0 = std::chrono::steady_clock::now();
+static double LabelTraceSeconds() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - label_trace_t0)
+        .count();
+}
+static std::atomic<u32> label_trace_lines{0};
+#define LABEL_TRACE(...)                                                                           \
+    do {                                                                                           \
+        if (label_trace_lines.fetch_add(1) < 6000) {                                               \
+            LOG_WARNING(Render_Vulkan, __VA_ARGS__);                                               \
+        }                                                                                          \
+    } while (0)
+static void TraceLabelWrite(const char* what, const void* address, u64 value) {
+    if (LabelTraceMode() == 0) {
+        return;
+    }
+    const auto a = reinterpret_cast<u64>(address);
+    if (a >= 0x250800000ull && a < 0x250800100ull) {
+        LABEL_TRACE("LABELTRACE t={:.4f}s PACKET {} writes {:#x} <- {:#x}", LabelTraceSeconds(),
+                    what, a, value);
+    }
+}
+static void StartLabelPoller() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::thread([] {
+            constexpr u64 base = 0x250800000ull;
+            constexpr int count = 64;
+            // Slots 0x20 and 0x48, and everything from 0x50 on (the others change every frame
+            // with hashes).
+            const auto watched = [](int i) { return i == 8 || i == 18 || (i >= 20 && i < 64); };
+            u32 last[count];
+            for (int i = 0; i < count; ++i) {
+                last[i] = *reinterpret_cast<volatile const u32*>(base + 4 * i);
+            }
+            for (;;) {
+                for (int i = 0; i < count; ++i) {
+                    if (!watched(i)) {
+                        continue;
+                    }
+                    const u32 now = *reinterpret_cast<volatile const u32*>(base + 4 * i);
+                    if (now != last[i]) {
+                        LABEL_TRACE("LABELTRACE t={:.4f}s slot {:#x}: {:#x} -> {:#x}",
+                                    LabelTraceSeconds(), base + 4 * i, last[i], now);
+                        last[i] = now;
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
+        }).detach();
+    });
+}
 
 static void MaybeRecordVideoOutLabelLock(Libraries::VideoOut::VideoOutPort* vo_port, u64* address,
                                          const void* data, u32 data_size) {
@@ -120,8 +222,11 @@ void Liverpool::ProcessCommands() {
     }
 }
 
+static std::atomic<u64> g_submitted{0}, g_completed{0};
+
 void Liverpool::Process(std::stop_token stoken) {
     Common::SetCurrentThreadName("shadPS4:GpuCommandProcessor");
+    Common::SetCurrentThreadPriority(Common::ThreadPriority::VeryHigh);
     gpu_id = std::this_thread::get_id();
 
     while (!stoken.stop_requested()) {
@@ -171,6 +276,7 @@ void Liverpool::Process(std::stop_token stoken) {
                 queue.submits.pop();
 
                 --num_submits;
+                ++g_completed;
                 std::scoped_lock lock2{submit_mutex};
                 submit_cv.notify_all();
             }
@@ -932,6 +1038,20 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 if (dma_data->dst_addr_lo == 0x3022C || !rasterizer) {
                     break;
                 }
+                DmaAudit("gfx", u32(dma_data->src_sel.Value()), u32(dma_data->dst_sel.Value()),
+                         (dma_data->dst_sel == DmaDataDst::Gds) ? dma_data->dst_addr_lo
+                                                                : dma_data->DstAddress<VAddr>(),
+                         (dma_data->src_sel == DmaDataSrc::Memory ||
+                          dma_data->src_sel == DmaDataSrc::MemoryUsingL2)
+                             ? dma_data->SrcAddress<VAddr>()
+                             : 0,
+                         dma_data->NumBytes(), dma_data->data);
+                if (dma_data->dst_sel == DmaDataDst::Memory ||
+                    dma_data->dst_sel == DmaDataDst::MemoryUsingL2) {
+                    TraceLabelWrite("gfx DMA_DATA", reinterpret_cast<const void*>(
+                                                        dma_data->DstAddress<VAddr>()),
+                                    dma_data->data);
+                }
                 if (dma_data->src_sel == DmaDataSrc::Data && dma_data->dst_sel == DmaDataDst::Gds) {
                     rasterizer->FillBuffer(dma_data->dst_addr_lo, dma_data->NumBytes(),
                                            dma_data->data, true);
@@ -1074,7 +1194,49 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     wait_is_memory ? reinterpret_cast<uintptr_t>(wait_reg_mem->Address<const u32*>())
                                    : uintptr_t{0};
                 const bool in_label_block = wait_address >= 0x250800000ull && wait_address < 0x250800100ull;
-                const s64 breakout_ms = in_label_block ? 3 : 2000;
+                // SHADPS4_LABEL_BREAKOUT_MS: how long a label-block wait may last before it is
+                // forced (default 3). The forced release lets the GPU use data the game has not
+                // finished writing (staging buffers filled by the CPU), so a longer wait may
+                // remove garbled textures at the cost of stalls.
+                static const s64 label_breakout_ms = [] {
+                    const char* value = std::getenv("SHADPS4_LABEL_BREAKOUT_MS");
+                    return value != nullptr ? std::max<s64>(0, std::atoll(value)) : s64{3};
+                }();
+                // Slots of the label block that nobody ever clears (0x58 and 0x60 in Rush of Blood:
+                // 46000 forced breakouts in 21 minutes of play, not one release by the game) are
+                // not waited on once that is known: each of those waits held the queue back, and
+                // with it the signals the title waits for from the card, for the full time every
+                // frame, only to be forced in the end. A slot that has been released by someone
+                // even once is waited on as before. SHADPS4_LABEL_BREAKOUT_MS=<ms> goes back to a
+                // fixed time for every slot (0 gives up at once everywhere).
+                struct LabelSlotHistory {
+                    std::atomic<u32> forced{0};
+                    std::atomic<u32> natural{0};
+                };
+                static LabelSlotHistory label_history[64];
+                static const bool label_breakout_fixed =
+                    std::getenv("SHADPS4_LABEL_BREAKOUT_MS") != nullptr;
+                LabelSlotHistory* slot_history =
+                    in_label_block ? &label_history[((wait_address - 0x250800000ull) >> 2) & 63]
+                                   : nullptr;
+                s64 breakout_ms = in_label_block ? label_breakout_ms : 2000;
+                if (slot_history != nullptr && !label_breakout_fixed &&
+                    slot_history->natural.load(std::memory_order_relaxed) == 0 &&
+                    slot_history->forced.load(std::memory_order_relaxed) >= 32) {
+                    breakout_ms = 0;
+                }
+                bool forced_out = false;
+                const bool trace_wait = LabelTraceMode() > 0 && in_label_block &&
+                                        !wait_reg_mem->Test(regs.reg_array);
+                if (trace_wait) {
+                    StartLabelPoller();
+                    LABEL_TRACE("LABELTRACE t={:.4f}s gfx wait begins on {:#x}: value {:#x}, wants "
+                                "{:#x} (function {}, mask {:#x})",
+                                LabelTraceSeconds(), wait_address,
+                                *wait_reg_mem->Address<const u32*>(), wait_reg_mem->ref,
+                                static_cast<u32>(wait_reg_mem->function.Value()),
+                                wait_reg_mem->mask);
+                }
                 while (!wait_reg_mem->Test(regs.reg_array)) {
 #if 1 // PC diagnostics: report stalled GPU waits (was ENABLE_BACHATA_RUNTIME only)
                     if (ShouldLogStallIteration(++wait_iterations)) {
@@ -1119,13 +1281,24 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                                                 std::chrono::steady_clock::now() - wait_start)
                                                 .count();
                     if (elapsed_ms >= breakout_ms) {
+                        forced_out = true;
                         if (in_label_block) {
+                            if (slot_history != nullptr &&
+                                slot_history->forced.fetch_add(1, std::memory_order_relaxed) + 1 ==
+                                    32 &&
+                                slot_history->natural.load(std::memory_order_relaxed) == 0 &&
+                                !label_breakout_fixed) {
+                                LOG_INFO(Render_Vulkan,
+                                         "label slot {:#x} has never been cleared by anybody in "
+                                         "32 waits: from now on it is not waited on",
+                                         wait_address);
+                            }
                             // Release the slot the way the wait wanted it (function 3 = "equal").
                             static std::atomic<u32> label_breakouts{0};
                             const u32 n = label_breakouts.fetch_add(1) + 1;
                             const u32 seen = *wait_reg_mem->Address<const u32*>();
                             if (static_cast<u32>(wait_reg_mem->function.Value()) == 3 &&
-                                wait_reg_mem->mask == 0xffffffffu) {
+                                wait_reg_mem->mask == 0xffffffffu && LabelTraceMode() != 2) {
                                 *wait_reg_mem->Address<u32*>() = wait_reg_mem->ref;
                             }
                             if (n <= 40 || (n % 500) == 0) {
@@ -1146,6 +1319,32 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     }
 
                     YIELD_GFX();
+                }
+                if (trace_wait) {
+                    LABEL_TRACE("LABELTRACE t={:.4f}s gfx wait on {:#x} ends after {} ms ({})",
+                                LabelTraceSeconds(), wait_address,
+                                std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - wait_start)
+                                    .count(),
+                                forced_out ? "forced by us" : "released by someone else");
+                }
+                if (slot_history != nullptr && !forced_out) {
+                    slot_history->natural.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (in_label_block && !forced_out && wait_iterations > 0) {
+                    // The label cleared by itself (nobody forced it): how long did that take?
+                    static std::atomic<u32> natural_releases{0};
+                    const u32 n = natural_releases.fetch_add(1) + 1;
+                    if (n <= 30 || (n % 500) == 0) {
+                        LOG_WARNING(Render_Vulkan,
+                                    "label wait released by the game #{}: address={:#x} after "
+                                    "{}ms ({} iterations)",
+                                    n, wait_address,
+                                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - wait_start)
+                                        .count(),
+                                    wait_iterations);
+                    }
                 }
                 break;
             }
@@ -1392,6 +1591,20 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             const auto* dma_data = reinterpret_cast<const PM4DmaData*>(header);
             if (dma_data->dst_addr_lo == 0x3022C || !rasterizer) {
                 break;
+            }
+            DmaAudit("asc", u32(dma_data->src_sel.Value()), u32(dma_data->dst_sel.Value()),
+                     (dma_data->dst_sel == DmaDataDst::Gds) ? dma_data->dst_addr_lo
+                                                            : dma_data->DstAddress<VAddr>(),
+                     (dma_data->src_sel == DmaDataSrc::Memory ||
+                      dma_data->src_sel == DmaDataSrc::MemoryUsingL2)
+                         ? dma_data->SrcAddress<VAddr>()
+                         : 0,
+                     dma_data->NumBytes(), dma_data->data);
+            if (dma_data->dst_sel == DmaDataDst::Memory ||
+                dma_data->dst_sel == DmaDataDst::MemoryUsingL2) {
+                TraceLabelWrite("asc DMA_DATA", reinterpret_cast<const void*>(
+                                                    dma_data->DstAddress<VAddr>()),
+                                dma_data->data);
             }
             if (dma_data->src_sel == DmaDataSrc::Data && dma_data->dst_sel == DmaDataDst::Gds) {
                 rasterizer->FillBuffer(dma_data->dst_addr_lo, dma_data->NumBytes(), dma_data->data,
@@ -1708,9 +1921,63 @@ void Liverpool::SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
         queue.submits.emplace(task.handle);
     }
 
-    std::scoped_lock lk{submit_mutex};
-    ++num_submits;
-    submit_cv.notify_one();
+    u64 my_index = 0;
+    {
+        std::scoped_lock lk{submit_mutex};
+        ++num_submits;
+        my_index = ++g_submitted;
+        submit_cv.notify_one();
+    }
+
+    // SHADPS4_SYNC_SUBMIT=<ms>: diagnostic. Make the GPU finish what it was given before the
+    // submitting game thread continues (as if the GPU were infinitely fast), waiting at most <ms>.
+    // SHADPS4_SYNC_SUBMIT_SKIP_MAIN=1 leaves out the thread that submits most (the frame thread).
+    static const s64 sync_ms = [] {
+        const char* v = std::getenv("SHADPS4_SYNC_SUBMIT");
+        return v != nullptr ? std::max<s64>(1, std::atoll(v)) : s64{0};
+    }();
+    if (sync_ms > 0 && std::this_thread::get_id() != gpu_id) {
+        static const bool skip_main = [] {
+            const char* v = std::getenv("SHADPS4_SYNC_SUBMIT_SKIP_MAIN");
+            return v != nullptr && v[0] == '1';
+        }();
+        static std::mutex count_mutex;
+        static std::map<std::thread::id, u64> counts;
+        static u64 total = 0;
+        bool skip = false;
+        {
+            std::scoped_lock cl{count_mutex};
+            const u64 mine = ++counts[std::this_thread::get_id()];
+            ++total;
+            if (skip_main && total > 50) {
+                u64 best = 0;
+                for (const auto& [id, n] : counts) {
+                    best = std::max(best, n);
+                }
+                skip = mine == best;
+            }
+        }
+        if (!skip) {
+            static std::atomic<u64> syncs{0}, timeouts{0}, waited_us{0};
+            const auto start = std::chrono::steady_clock::now();
+            std::unique_lock lk{submit_mutex};
+            const bool idle = submit_cv.wait_for(lk, std::chrono::milliseconds{sync_ms},
+                                                 [my_index] { return g_completed.load() >= my_index; });
+            const u64 us = std::chrono::duration_cast<std::chrono::microseconds>(
+                               std::chrono::steady_clock::now() - start)
+                               .count();
+            waited_us += us;
+            if (!idle) {
+                ++timeouts;
+            }
+            if (++syncs % 200 == 0) {
+                LOG_WARNING(Render_Vulkan,
+                            "SYNC_SUBMIT: {} submissions waited for, {} timed out, {:.1f} ms total",
+                            syncs.load(), timeouts.load(),
+                            static_cast<double>(waited_us.load()) / 1000.0);
+            }
+        }
+    }
 }
 
 void Liverpool::SubmitAsc(u32 gnm_vqid, std::span<const u32> acb) {
@@ -1733,6 +2000,7 @@ void Liverpool::SubmitAsc(u32 gnm_vqid, std::span<const u32> acb) {
     std::scoped_lock lk{submit_mutex};
     num_mapped_queues = std::max(num_mapped_queues, gnm_vqid + 1);
     ++num_submits;
+    ++g_submitted;
     submit_cv.notify_one();
 }
 

@@ -2,7 +2,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <map>
+#include <mutex>
+#include <string>
 #include <thread>
+#include <tuple>
+#include <vector>
+#include <fmt/format.h>
 #include <magic_enum/magic_enum.hpp>
 
 #include "common/assert.h"
@@ -10,6 +18,7 @@
 #include "core/guest_cpu/guest_wait_trace.h"
 #include "common/logging/log.h"
 #include "common/singleton.h"
+#include "common/thread.h"
 #include "core/file_sys/fs.h"
 #include "core/libraries/kernel/equeue.h"
 #include "core/libraries/kernel/kernel.h"
@@ -24,6 +33,161 @@ extern boost::asio::io_context io_context;
 extern void KernelSignalRequest();
 
 static std::unordered_map<s32, EqueueInternal*> kqueues;
+
+// DIAGNOSTIC (SHADPS4_FRAME_STATS): which event queues the game's threads wait on, for how long,
+// and how often (and how evenly) the events they wait for are raised.
+namespace {
+bool WaitStatsOn() {
+    static const bool on = [] {
+        const char* value = std::getenv("SHADPS4_FRAME_STATS");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return on;
+}
+using StatClock = std::chrono::steady_clock;
+struct WaitStat {
+    u64 waits{};
+    u64 empty{};
+    double total{};
+    double longest{};
+    std::map<std::pair<u64, s16>, u64> got;
+};
+struct RaiseStat {
+    u64 raised{};
+    double gaps{};
+    double longest_gap{};
+    StatClock::time_point last{};
+};
+std::mutex wait_stats_mutex;
+std::map<std::string, WaitStat> wait_stats;
+std::map<std::tuple<std::string, u64, s16>, RaiseStat> raise_stats;
+} // namespace
+
+
+// DIAGNOSTIC (SHADPS4_EQ_TRACE=1): a timeline of the main thread's waits, the events raised and
+// the title's submits, logged once, 25 s after the first of them.
+namespace {
+bool TraceOn() {
+    static const bool on = [] {
+        const char* value = std::getenv("SHADPS4_EQ_TRACE");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return on;
+}
+std::mutex trace_mutex;
+std::vector<std::pair<double, std::string>> trace_lines;
+StatClock::time_point trace_first{};
+StatClock::time_point trace_origin{};
+bool trace_done = false;
+} // namespace
+
+void EqueueTraceNote(const std::string& what) {
+    if (!TraceOn()) {
+        return;
+    }
+    const auto now = StatClock::now();
+    std::string dump;
+    {
+        std::scoped_lock lock{trace_mutex};
+        if (trace_done) {
+            return;
+        }
+        if (trace_first == StatClock::time_point{}) {
+            trace_first = now;
+        }
+        if (now - trace_first < std::chrono::seconds{25}) {
+            return;
+        }
+        if (trace_origin == StatClock::time_point{}) {
+            trace_origin = now;
+        }
+        trace_lines.emplace_back(std::chrono::duration<double>(now - trace_origin).count() * 1e3,
+                                 fmt::format("{}: {}", Common::GetCurrentThreadName(), what));
+        if (trace_lines.size() < 700) {
+            return;
+        }
+        trace_done = true;
+        for (const auto& [t, line] : trace_lines) {
+            dump += fmt::format("  {:9.2f} ms  {}\n", t, line);
+        }
+        trace_lines.clear();
+    }
+    LOG_INFO(Kernel_Event, "EQ_TRACE timeline:\n{}", dump);
+}
+
+
+// DIAGNOSTIC (SHADPS4_FRAME_STATS): how often each thread asks for the time, the vblank and
+// flip status, and hands audio over.
+namespace {
+std::map<std::string, u64> api_calls;
+} // namespace
+
+void ApiCallNote(const char* name) {
+    if (!WaitStatsOn()) {
+        return;
+    }
+    // Counted per thread and handed over now and then: some of these are called thousands of
+    // times a second.
+    struct Local {
+        std::map<const char*, u64> counts;
+        StatClock::time_point flushed{};
+        u32 since{};
+    };
+    thread_local Local local;
+    ++local.counts[name];
+    if (++local.since < 64) {
+        return;
+    }
+    local.since = 0;
+    const auto now = StatClock::now();
+    if (now - local.flushed < std::chrono::milliseconds{250}) {
+        return;
+    }
+    local.flushed = now;
+    const std::string thread = Common::GetCurrentThreadName();
+    std::scoped_lock lock{wait_stats_mutex};
+    for (auto& [what, count] : local.counts) {
+        api_calls[fmt::format("{} {}", thread, what)] += count;
+        count = 0;
+    }
+}
+
+std::string EqueueWaitReport(double seconds) {
+    std::map<std::string, WaitStat> waits;
+    std::map<std::tuple<std::string, u64, s16>, RaiseStat> raises;
+    std::map<std::string, u64> calls;
+    {
+        std::scoped_lock lock{wait_stats_mutex};
+        waits.swap(wait_stats);
+        raises.swap(raise_stats);
+        calls.swap(api_calls);
+    }
+    std::string out;
+    for (const auto& [key, count] : calls) {
+        if (count >= 20) {
+            out += fmt::format("  calls: {}: {} ({:.1f} a second)\n", key, count, count / seconds);
+        }
+    }
+    for (const auto& [key, stat] : waits) {
+        std::string got;
+        for (const auto& [event, count] : stat.got) {
+            got += fmt::format(" id {:#x} filter {}: {};", event.first, event.second, count);
+        }
+        out += fmt::format("  {}: {} waits, {:.1f} ms on average, longest {:.1f} ms, {:.0f} ms "
+                           "in all ({:.0f}% of the time); events received:{}\n",
+                           key, stat.waits, stat.waits != 0 ? stat.total / stat.waits * 1e3 : 0.0,
+                           stat.longest * 1e3, stat.total * 1e3, 100.0 * stat.total / seconds,
+                           got.empty() ? " none" : got);
+    }
+    for (const auto& [key, stat] : raises) {
+        const u64 gaps = stat.raised > 1 ? stat.raised - 1 : 0;
+        out += fmt::format("  event raised on '{}' id {:#x} filter {}: {} times, {:.1f} ms apart on "
+                           "average, longest gap {:.1f} ms\n",
+                           std::get<0>(key), std::get<1>(key), std::get<2>(key), stat.raised,
+                           gaps != 0 ? stat.gaps / gaps * 1e3 : 0.0, stat.longest_gap * 1e3);
+    }
+    return out;
+}
 static constexpr auto HrTimerSpinlockThresholdNs = 1200000u;
 
 EqueueInternal* GetEqueue(OrbisKernelEqueue eq) {
@@ -209,6 +373,21 @@ int EqueueInternal::WaitForEvents(OrbisKernelEvent* ev, int num, const OrbisKern
 
 bool EqueueInternal::TriggerEvent(u64 ident, s16 filter, void* trigger_data) {
     bool has_found = false;
+    if (TraceOn()) {
+        EqueueTraceNote(fmt::format("raise '{}' id {:#x}", m_name, ident));
+    }
+    if (WaitStatsOn()) {
+        const auto now = StatClock::now();
+        std::scoped_lock stats_lock{wait_stats_mutex};
+        auto& stat = raise_stats[{std::string{m_name}, ident, filter}];
+        if (stat.raised != 0) {
+            const double gap = std::chrono::duration<double>(now - stat.last).count();
+            stat.gaps += gap;
+            stat.longest_gap = std::max(stat.longest_gap, gap);
+        }
+        ++stat.raised;
+        stat.last = now;
+    }
     {
         std::scoped_lock lock{m_mutex};
         for (auto& event : m_events) {
@@ -493,7 +672,32 @@ int PS4_SYSV_ABI sceKernelWaitEqueue(OrbisKernelEqueue eq, OrbisKernelEvent* ev,
         }
     }
 
+    const bool stats_on = WaitStatsOn();
+    const bool trace_main = TraceOn() && Common::GetCurrentThreadName() == "Game:Main";
+    if (trace_main) {
+        EqueueTraceNote(fmt::format("wait begins on '{}'", equeue->GetName()));
+    }
+    const auto wait_began = stats_on ? StatClock::now() : StatClock::time_point{};
     *out = equeue->WaitForEvents(ev, num, timo);
+    if (trace_main) {
+        EqueueTraceNote(fmt::format("wait ends on '{}' ({} events)", equeue->GetName(), *out));
+    }
+    if (stats_on) {
+        const double waited = std::chrono::duration<double>(StatClock::now() - wait_began).count();
+        const std::string key = fmt::format("{} on '{}'", Common::GetCurrentThreadName(),
+                                            equeue->GetName());
+        std::scoped_lock stats_lock{wait_stats_mutex};
+        auto& stat = wait_stats[key];
+        ++stat.waits;
+        stat.total += waited;
+        stat.longest = std::max(stat.longest, waited);
+        if (*out <= 0) {
+            ++stat.empty;
+        }
+        for (int i = 0; i < *out; ++i) {
+            ++stat.got[{ev[i].ident, static_cast<s16>(ev[i].filter)}];
+        }
+    }
 
     if (trace_wait) {
         static std::atomic<u32> ends{0};

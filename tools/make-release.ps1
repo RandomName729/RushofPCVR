@@ -34,7 +34,8 @@ foreach ($name in "PkgTool.exe", "LibOrbisPkg.dll", "LICENSE.txt") {
 }
 foreach ($path in "pc-vr\launch.ps1", "pc-vr\settings.txt", "run.bat", "Play Rush of Blood (DualSense).bat",
                   "pc-vr\template\user\config.json", "pc-vr\template\user\input_config\default.ini",
-                  "pc-vr\template\user\input_config\global.ini", "LICENSE", "THIRD-PARTY-NOTICES.md") {
+                  "pc-vr\template\user\input_config\global.ini", "LICENSE", "THIRD-PARTY-NOTICES.md",
+                  "CHANGELOG.md") {
     Need (Join-Path $root $path) "file of the repository"
 }
 
@@ -81,6 +82,9 @@ $defaults = @(
     "# What this release starts with (the window at the start changes and saves them):",
     "eye_width=1152",
     "fps=60",
+    "target_fps=60",
+    "aniso=16",
+    "fxaa=0.65",
     "fov=120",
     "fov_of=psvr",
     "menu=1"
@@ -108,7 +112,9 @@ through Virtual Desktop.
    the game is. Keep this folder's path short, e.g. C:\Games\RushVR: the emulator cannot open
    the game's files whose full path would be longer than 260 characters.
 2. Virtual Desktop: install the Streamer on this PC and choose VDXR as the OpenXR runtime in
-   its Options. In the headset, set Virtual Desktop's frame rate to 120 (Streaming settings).
+   its Options. In the headset, set Virtual Desktop's frame rate to 120 (Streaming settings): the game
+   is held to 60 frames a second, which is exactly every other refresh at 120. (At 90 use
+   45 and at 80 use 40 with the "Aim for" choice in the start-up window.)
    (SteamVR can be used instead: pick it under "Headset connection" in the start-up window,
    with the headset connected to SteamVR first. It has been tested through level 4.)
 3. Connect the DualSense to this PC (USB cable, or Bluetooth paired with the PC, not with the
@@ -118,15 +124,21 @@ through Virtual Desktop.
 5. In the game's own start-up question, choose the DualShock controller, not the Move
    controllers (they are not supported).
 
-This is an early version: the title screen, the intro and levels 1 to 4 play through (later
-levels are untested), with visual glitches in the levels, and the game runs slower than on
-the console. Settings are in
-pc-vr\settings.txt, the log in pc-vr\user\log\shad_log.txt, saves in pc-vr\user\home.
+What is new in $Version (the whole list is in CHANGELOG.md): the game runs at the speed it was made for,
+with the captions in step with the voice, at 50 to 60 frames a second with a steady "Aim for" rate;
+the garbled textures are gone; textures are sharper (16x anisotropic filtering, PS4 Pro mode);
+FXAA is back; a new start-up window.
+
+This is still an early version: the title screen, the intro and levels 1 to 4 play through
+(later levels are untested). The picture can still look pixelated or soft in the headset, and the
+game can freeze for a second or more now and then. Settings are in pc-vr\settings.txt, the log
+in pc-vr\user\log\shad_log.txt, saves in pc-vr\user\home.
 
 RushVR is free software under the GNU GPL, version 2 or later (LICENSE.txt), built on shadPS4.
 $source
 It contains no part of the game: use it only with a game you own.
 "@
+Write-Text (Join-Path $pc "CHANGELOG.md") ([IO.File]::ReadAllText((Join-Path $root "CHANGELOG.md")))
 Write-Text (Join-Path $pc "LICENSE.txt") ([IO.File]::ReadAllText((Join-Path $root "LICENSE")))
 Write-Text (Join-Path $pc "THIRD-PARTY-NOTICES.md") ([IO.File]::ReadAllText((Join-Path $root "THIRD-PARTY-NOTICES.md")))
 
@@ -159,6 +171,8 @@ try {
 } finally {
     $zip.Dispose()
 }
+$notes = Join-Path $root "RELEASE-NOTES-$Version.md"
+if (Test-Path -LiteralPath $notes) { Copy-Item -LiteralPath $notes -Destination (Join-Path $out "RELEASE-NOTES.md") }
 $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLower()
 [IO.File]::WriteAllText((Join-Path $out "SHA256SUMS.txt"), "$hash  $name-PC-VR-Windows.zip`n", $utf8)
 "{0}  {1:N1} MB" -f $zipPath, ((Get-Item -LiteralPath $zipPath).Length / 1MB)
