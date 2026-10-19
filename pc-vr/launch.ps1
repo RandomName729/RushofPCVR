@@ -59,6 +59,8 @@ function Test-MotionEdition {
     return $false
 }
 $motionEdition = Test-MotionEdition
+# The version shown in the window's banner (the release scripts check that it is the release's).
+$launcherVersion = "0.3.6"
 
 # PS4 Pro mode ("neo_mode" in user\config.json): the emulator then tells the game it runs on a
 # PlayStation 4 Pro, which gives sharper textures. The emulator reads it as it starts.
@@ -110,6 +112,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
@@ -117,16 +120,25 @@ namespace RushUi
 {
     public static class Theme
     {
-        public static readonly Color Back = Color.FromArgb(17, 18, 23);
-        public static readonly Color Card = Color.FromArgb(27, 29, 37);
-        public static readonly Color Field = Color.FromArgb(40, 43, 55);
-        public static readonly Color FieldHover = Color.FromArgb(52, 56, 71);
-        public static readonly Color Line = Color.FromArgb(46, 49, 62);
-        public static readonly Color Text = Color.FromArgb(235, 237, 243);
-        public static readonly Color Dim = Color.FromArgb(143, 149, 165);
-        public static readonly Color Accent = Color.FromArgb(232, 69, 79);
-        public static readonly Color AccentHover = Color.FromArgb(243, 98, 107);
-        public static readonly Color AccentDown = Color.FromArgb(200, 52, 62);
+        public static readonly Color Back = Color.FromArgb(9, 7, 8);
+        public static readonly Color Card = Color.FromArgb(17, 14, 15);
+        public static readonly Color Field = Color.FromArgb(29, 24, 25);
+        public static readonly Color FieldHover = Color.FromArgb(45, 37, 38);
+        public static readonly Color Line = Color.FromArgb(47, 35, 37);
+        public static readonly Color Text = Color.FromArgb(205, 196, 187);
+        public static readonly Color Dim = Color.FromArgb(128, 116, 112);
+        public static readonly Color Accent = Color.FromArgb(150, 24, 32);
+        public static readonly Color AccentHover = Color.FromArgb(184, 38, 44);
+        public static readonly Color AccentDown = Color.FromArgb(108, 16, 22);
+        public static readonly Color Blood = Color.FromArgb(66, 9, 13);
+        public static readonly Color Edge = Color.FromArgb(64, 20, 24);
+
+        // A colour between a and b: t = 0 is a, t = 1 is b.
+        public static Color Mix(Color a, Color b, float t)
+        {
+            t = Math.Max(0f, Math.Min(1f, t));
+            return Color.FromArgb(a.R + (int)((b.R - a.R) * t), a.G + (int)((b.G - a.G) * t), a.B + (int)((b.B - a.B) * t));
+        }
 
         // Over a control that is switched off: lets it fade into the card behind it.
         public static void Fade(Graphics g, Control c)
@@ -172,6 +184,49 @@ namespace RushUi
     }
 
     // A rounded panel with a title.
+    // Dirt: a square of speckle, pale and dark flecks, the same every time, laid over a surface.
+    public static class Grit
+    {
+        private static Bitmap light;
+        private static Bitmap heavy;
+        private static readonly object gate = new object();
+
+        private static Bitmap Build(int boost)
+        {
+            Bitmap bmp = new Bitmap(192, 192, PixelFormat.Format32bppArgb);
+            Random rnd = new Random(1313);
+            for (int y = 0; y < 192; y++)
+            {
+                for (int x = 0; x < 192; x++)
+                {
+                    int roll = rnd.Next(100);
+                    Color c = Color.FromArgb(0, 0, 0, 0);
+                    if (roll < 12) { c = Color.FromArgb(rnd.Next(5, 14) * boost, 255, 240, 230); }
+                    else if (roll < 44) { c = Color.FromArgb(rnd.Next(8, 26) * boost, 0, 0, 0); }
+                    bmp.SetPixel(x, y, c);
+                }
+            }
+            return bmp;
+        }
+
+        public static void Overlay(Graphics g, Rectangle area, bool strong)
+        {
+            if (area.Width <= 0 || area.Height <= 0) { return; }
+            try
+            {
+                lock (gate)
+                {
+                    if (light == null) { light = Build(1); heavy = Build(2); }
+                }
+                using (TextureBrush brush = new TextureBrush(strong ? heavy : light, WrapMode.Tile))
+                {
+                    g.FillRectangle(brush, area);
+                }
+            }
+            catch (Exception) { }
+        }
+    }
+
     public class Card : Panel
     {
         private Font titleFont = new Font("Segoe UI Semibold", 10.5f);
@@ -189,16 +244,26 @@ namespace RushUi
             Graphics g = e.Graphics;
             g.Clear(Parent != null ? Parent.BackColor : Theme.Back);
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (GraphicsPath p = Theme.Round(new RectangleF(0.5f, 0.5f, Width - 2f, Height - 2f), 10f))
+            using (GraphicsPath p = Theme.Round(new RectangleF(0.5f, 0.5f, Width - 2f, Height - 2f), 4f))
             using (SolidBrush b = new SolidBrush(Theme.Card))
             using (Pen pen = new Pen(Theme.Line))
             {
                 g.FillPath(b, p);
                 g.DrawPath(pen, p);
             }
+            using (Pen glint = new Pen(Color.FromArgb(46, Theme.Accent), 1f))
+            using (Pen shade = new Pen(Color.FromArgb(120, 0, 0, 0), 1f))
+            {
+                g.DrawLine(glint, 10f, 1f, Width - 11f, 1f);
+                g.DrawLine(shade, 5f, Height - 3f, Width - 6f, Height - 3f);
+            }
             if (!string.IsNullOrEmpty(Title))
             {
-                TextRenderer.DrawText(g, Title, titleFont, new Point(18, 14), Theme.Text,
+                using (SolidBrush mark = new SolidBrush(Theme.Accent))
+                {
+                    g.FillRectangle(mark, 18f, 16f, 3f, 15f);
+                }
+                TextRenderer.DrawText(g, Title, titleFont, new Point(28, 14), Theme.Text,
                                       TextFormatFlags.NoPadding | TextFormatFlags.Left);
             }
         }
@@ -428,8 +493,9 @@ namespace RushUi
             }
             if (tx - pad >= 4f)
             {
-                using (GraphicsPath fill = Theme.Round(new RectangleF(pad, cy - 2f, tx - pad, 4f), 2f))
-                using (SolidBrush b = new SolidBrush(Theme.Accent))
+                RectangleF part = new RectangleF(pad, cy - 2f, tx - pad, 4f);
+                using (GraphicsPath fill = Theme.Round(part, 2f))
+                using (LinearGradientBrush b = new LinearGradientBrush(part, Theme.Blood, Theme.AccentHover, 0f))
                 {
                     g.FillPath(b, fill);
                 }
@@ -525,6 +591,8 @@ namespace RushUi
     {
         private bool on;
         private bool hover;
+        private float t; // 0 = off, 1 = on, in between while the knob slides
+        private System.Windows.Forms.Timer slide;
 
         public event EventHandler CheckedChanged;
 
@@ -545,9 +613,31 @@ namespace RushUi
             {
                 if (on == value) { return; }
                 on = value;
+                if (!IsHandleCreated) { t = on ? 1f : 0f; }
+                else { StartSlide(); }
                 Invalidate();
                 if (CheckedChanged != null) { CheckedChanged(this, EventArgs.Empty); }
             }
+        }
+
+        private void StartSlide()
+        {
+            if (slide == null)
+            {
+                slide = new System.Windows.Forms.Timer();
+                slide.Interval = 15;
+                slide.Tick += OnSlide;
+            }
+            slide.Start();
+        }
+
+        private void OnSlide(object sender, EventArgs e)
+        {
+            float target = on ? 1f : 0f;
+            if (t < target) { t = Math.Min(target, t + 0.2f); }
+            else if (t > target) { t = Math.Max(target, t - 0.2f); }
+            if (t == target) { slide.Stop(); }
+            Invalidate();
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -556,7 +646,7 @@ namespace RushUi
             g.Clear(Parent != null ? Parent.BackColor : Theme.Back);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             float top = (Height - 20f) / 2f;
-            Color fill = on ? Theme.Accent : (hover ? Theme.FieldHover : Theme.Field);
+            Color fill = Theme.Mix(hover ? Theme.FieldHover : Theme.Field, Theme.Accent, t);
             using (GraphicsPath pill = Theme.Round(new RectangleF(0.5f, top, 37f, 20f), 10f))
             using (SolidBrush b = new SolidBrush(fill))
             {
@@ -566,8 +656,8 @@ namespace RushUi
                     using (Pen ring = new Pen(Theme.Accent, 1.5f)) { g.DrawPath(ring, pill); }
                 }
             }
-            float kx = on ? 21f : 4f;
-            using (SolidBrush knob = new SolidBrush(Color.White))
+            float kx = 4f + 17f * t;
+            using (SolidBrush knob = new SolidBrush(Theme.Text))
             {
                 g.FillEllipse(knob, kx, top + 3f, 14f, 14f);
             }
@@ -596,6 +686,12 @@ namespace RushUi
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; Invalidate(); }
         protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
         protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && slide != null) { slide.Dispose(); }
+            base.Dispose(disposing);
+        }
     }
 
     // A rounded button; Primary is the one in the accent colour.
@@ -603,6 +699,8 @@ namespace RushUi
     {
         private bool hover;
         private bool down;
+        private float glow; // 0 = at rest, 1 = under the pointer
+        private System.Windows.Forms.Timer fader;
         private Font buttonFont = new Font("Segoe UI Semibold", 10f);
         public bool Primary { get; set; }
 
@@ -613,33 +711,56 @@ namespace RushUi
             Cursor = Cursors.Hand;
         }
 
+        private void StartFade()
+        {
+            if (fader == null)
+            {
+                fader = new System.Windows.Forms.Timer();
+                fader.Interval = 15;
+                fader.Tick += OnFade;
+            }
+            fader.Start();
+        }
+
+        private void OnFade(object sender, EventArgs e)
+        {
+            float target = hover ? 1f : 0f;
+            if (glow < target) { glow = Math.Min(target, glow + 0.2f); }
+            else if (glow > target) { glow = Math.Max(target, glow - 0.2f); }
+            if (glow == target) { fader.Stop(); }
+            Invalidate();
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
             g.Clear(Parent != null ? Parent.BackColor : Theme.Back);
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            Color fill;
-            if (Primary) { fill = down ? Theme.AccentDown : (hover ? Theme.AccentHover : Theme.Accent); }
-            else { fill = down ? Theme.Line : (hover ? Theme.FieldHover : Theme.Field); }
+            Color rest = Primary ? Theme.Accent : Theme.Field;
+            Color over = Primary ? Theme.AccentHover : Theme.FieldHover;
+            Color fill = down ? (Primary ? Theme.AccentDown : Theme.Line) : Theme.Mix(rest, over, glow);
             using (GraphicsPath p = Theme.Round(new RectangleF(0.5f, 0.5f, Width - 2f, Height - 2f), 8f))
             using (SolidBrush b = new SolidBrush(fill))
             {
                 g.FillPath(b, p);
+                if (Primary)
+                {
+                    using (Pen edge = new Pen(Color.FromArgb((int)(40 + 80 * glow), 255, 120, 130), 1f)) { g.DrawPath(edge, p); }
+                }
                 if (Focused && ShowFocusCues)
                 {
                     using (Pen ring = new Pen(Primary ? Theme.Text : Theme.Accent, 1.5f)) { g.DrawPath(ring, p); }
                 }
             }
-            TextRenderer.DrawText(g, Text, buttonFont, new Rectangle(0, 0, Width, Height), Color.White,
+            TextRenderer.DrawText(g, Text, buttonFont, new Rectangle(0, 0, Width, Height), Theme.Text,
                                   TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
                                   TextFormatFlags.NoPadding);
             Theme.Fade(g, this);
         }
 
         protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
-
-        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; Invalidate(); }
-        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; down = false; Invalidate(); }
+        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; StartFade(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; down = false; StartFade(); Invalidate(); }
         protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); down = true; Invalidate(); }
         protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); down = false; Invalidate(); }
         protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
@@ -647,7 +768,309 @@ namespace RushUi
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { buttonFont.Dispose(); }
+            if (disposing)
+            {
+                buttonFont.Dispose();
+                if (fader != null) { fader.Dispose(); }
+            }
+            base.Dispose(disposing);
+        }
+    }
+
+    // The window's minimize and close buttons (Kind 0 = minimize, 1 = close).
+    public class CaptionButton : Control
+    {
+        private bool hover;
+        public int Kind { get; set; }
+
+        public CaptionButton()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            Cursor = Cursors.Hand;
+            TabStop = false;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            Color back = hover ? (Kind == 1 ? Theme.Accent : Theme.FieldHover) : Theme.Back;
+            g.Clear(back);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            float cx = Width / 2f;
+            float cy = Height / 2f;
+            using (Pen pen = new Pen(hover ? Theme.Text : Theme.Dim, 1.4f))
+            {
+                if (Kind == 1)
+                {
+                    g.DrawLine(pen, cx - 5f, cy - 5f, cx + 5f, cy + 5f);
+                    g.DrawLine(pen, cx - 5f, cy + 5f, cx + 5f, cy - 5f);
+                }
+                else
+                {
+                    g.DrawLine(pen, cx - 5f, cy + 3f, cx + 5f, cy + 3f);
+                }
+            }
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; Invalidate(); }
+    }
+
+    // The banner at the top: name, edition and version, and the grip for moving the window.
+    public class Header : Control
+    {
+        [DllImport("user32.dll")]
+        private static extern bool ReleaseCapture();
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        private Font wordFont = new Font("Segoe UI Black", 24f);
+        private Font smallFont = new Font("Segoe UI Semibold", 8f);
+        private Font badgeFont = new Font("Segoe UI Semibold", 7.5f);
+        public string Badge { get; set; }
+        public bool BadgeSolid { get; set; }
+        public string Version { get; set; }
+
+        public Header()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        }
+
+        // Text with a little space between the letters; returns where it ended.
+        private static int Spaced(Graphics g, string text, Font font, Color color, int x, int y, int gap)
+        {
+            foreach (char ch in text)
+            {
+                string one = ch.ToString();
+                TextRenderer.DrawText(g, one, font, new Point(x, y), color, TextFormatFlags.NoPadding | TextFormatFlags.Left);
+                x += TextRenderer.MeasureText(g, one, font, new Size(200, 100), TextFormatFlags.NoPadding).Width + gap;
+            }
+            return x;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            Rectangle all = new Rectangle(0, 0, Width, Height);
+            using (LinearGradientBrush wash = new LinearGradientBrush(all, Color.FromArgb(44, 7, 12), Theme.Back, 0f))
+            {
+                g.FillRectangle(wash, all);
+            }
+            Grit.Overlay(g, all, true);
+            using (LinearGradientBrush grime = new LinearGradientBrush(all, Color.FromArgb(0, 0, 0, 0), Color.FromArgb(120, 0, 0, 0), 90f))
+            {
+                g.FillRectangle(grime, all);
+            }
+            Random rnd = new Random(77);
+            // Blood run down from the top edge.
+            using (SolidBrush drip = new SolidBrush(Color.FromArgb(150, 96, 12, 20)))
+            {
+                for (int k = 0; k < 5; k++)
+                {
+                    float dx = Width * (0.44f + 0.12f * k) + rnd.Next(-10, 10);
+                    float len = 8f + rnd.Next(0, 20);
+                    float w = 2f + rnd.Next(0, 2);
+                    g.FillRectangle(drip, dx, 0f, w, len);
+                    g.FillEllipse(drip, dx - 1f, len - 1f, w + 2f, w + 3f);
+                }
+            }
+            // Scratches.
+            using (Pen scratch = new Pen(Color.FromArgb(26, 255, 236, 226), 1f))
+            {
+                for (int k = 0; k < 9; k++)
+                {
+                    float sx = rnd.Next(0, Math.Max(1, Width - 80));
+                    float sy = rnd.Next(4, Math.Max(5, Height - 6));
+                    g.DrawLine(scratch, sx, sy, sx + 20 + rnd.Next(0, 60), sy + rnd.Next(-6, 7));
+                }
+            }
+            // Claw marks, faint, behind the right half of the banner.
+            using (Pen claw = new Pen(Color.FromArgb(40, Theme.Accent), 1.4f))
+            {
+                for (int k = 0; k < 4; k++)
+                {
+                    float x0 = Width * 0.52f + k * 16f;
+                    g.DrawLine(claw, x0, 6f, x0 - 34f, Height - 16f);
+                }
+            }
+            Spaced(g, "RUSHVR", wordFont, Color.FromArgb(22, 3, 5), 26, 10, 2);
+            int x = Spaced(g, "RUSH", wordFont, Theme.Text, 24, 8, 2);
+            x = Spaced(g, "VR", wordFont, Theme.Accent, x, 8, 2);
+            Spaced(g, "UNTIL DAWN: RUSH OF BLOOD   ·   PC VR", smallFont, Theme.Dim, 27, 56, 2);
+
+            int bx = x + 12;
+            if (!string.IsNullOrEmpty(Badge))
+            {
+                Size bs = TextRenderer.MeasureText(g, Badge, badgeFont, new Size(300, 40), TextFormatFlags.NoPadding);
+                Rectangle pill = new Rectangle(bx, 20, bs.Width + 18, 20);
+                using (GraphicsPath gp = Theme.Round(pill, 3f))
+                {
+                    if (BadgeSolid)
+                    {
+                        using (SolidBrush fill = new SolidBrush(Theme.Accent)) { g.FillPath(fill, gp); }
+                    }
+                    else
+                    {
+                        using (Pen outline = new Pen(Theme.Dim, 1f)) { g.DrawPath(outline, gp); }
+                    }
+                }
+                TextRenderer.DrawText(g, Badge, badgeFont, new Rectangle(pill.X, pill.Y, pill.Width, pill.Height),
+                                      BadgeSolid ? Theme.Text : Theme.Dim,
+                                      TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                bx = pill.Right + 10;
+            }
+            if (!string.IsNullOrEmpty(Version))
+            {
+                TextRenderer.DrawText(g, "v" + Version, smallFont, new Point(bx, 23), Theme.Dim,
+                                      TextFormatFlags.NoPadding | TextFormatFlags.Left);
+            }
+            // The line under the banner: crimson fading out to the right.
+            Rectangle rule = new Rectangle(0, Height - 2, Width, 2);
+            using (LinearGradientBrush line = new LinearGradientBrush(rule, Theme.Accent, Theme.Back, 0f))
+            {
+                g.FillRectangle(line, rule);
+            }
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.Button == MouseButtons.Left && FindForm() != null)
+            {
+                ReleaseCapture();
+                SendMessage(FindForm().Handle, 0xA1, (IntPtr)2, IntPtr.Zero);
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                wordFont.Dispose();
+                smallFont.Dispose();
+                badgeFont.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+    }
+
+    // The strip along the bottom: what the game will start with.
+    public class StatusBar : Control
+    {
+        private string[] items = new string[0];
+        private bool ok = true;
+        private Font statusFont = new Font("Segoe UI", 8.5f);
+
+        public StatusBar()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        }
+
+        public string[] Items { get { return items; } set { items = value ?? new string[0]; Invalidate(); } }
+        public bool Ok { get { return ok; } set { ok = value; Invalidate(); } }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(Color.FromArgb(12, 10, 11));
+            Grit.Overlay(g, new Rectangle(0, 0, Width, Height), false);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (Pen top = new Pen(Theme.Line, 1f)) { g.DrawLine(top, 0, 0, Width, 0); }
+            using (SolidBrush dot = new SolidBrush(ok ? Color.FromArgb(86, 140, 84) : Color.FromArgb(196, 146, 44)))
+            {
+                g.FillEllipse(dot, 20f, Height / 2f - 4f, 8f, 8f);
+            }
+            string text = string.Join("   ·   ", items);
+            TextRenderer.DrawText(g, text, statusFont, new Rectangle(38, 0, Math.Max(1, Width - 52), Height), Theme.Dim,
+                                  TextFormatFlags.VerticalCenter | TextFormatFlags.Left |
+                                  TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { statusFont.Dispose(); }
+            base.Dispose(disposing);
+        }
+    }
+
+    // The window itself: no system title bar (the banner is one), a thin crimson edge, rounded
+    // corners where Windows 11 offers them, and a quick fade in.
+    public class Window : Form
+    {
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+        private System.Windows.Forms.Timer fade;
+
+        public Window()
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer, true);
+            Opacity = 0;
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ClassStyle |= 0x00020000; // a drop shadow
+                cp.Style |= 0x00020000;      // the taskbar can minimize and restore it
+                return cp;
+            }
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            try
+            {
+                int round = 2;
+                DwmSetWindowAttribute(Handle, 33, ref round, 4);
+                int edge = Theme.Edge.R | (Theme.Edge.G << 8) | (Theme.Edge.B << 16);
+                DwmSetWindowAttribute(Handle, 34, ref edge, 4);
+            }
+            catch (Exception) { }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(Theme.Back);
+            Grit.Overlay(e.Graphics, ClientRectangle, false);
+            using (Pen edge = new Pen(Theme.Edge, 1f))
+            {
+                e.Graphics.DrawRectangle(edge, 0, 0, Width - 1, Height - 1);
+            }
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            fade = new System.Windows.Forms.Timer();
+            fade.Interval = 15;
+            fade.Tick += OnFadeTick;
+            fade.Start();
+        }
+
+        private void OnFadeTick(object sender, EventArgs e)
+        {
+            double next = Opacity + 0.12;
+            if (next >= 1.0)
+            {
+                next = 1.0;
+                fade.Stop();
+            }
+            Opacity = next;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && fade != null) { fade.Dispose(); }
             base.Dispose(disposing);
         }
     }
@@ -1185,13 +1608,11 @@ function Show-MenuModern {
         # The controllers card sits above the bottom row.
         $dy = 124
 
-        $form = New-Object System.Windows.Forms.Form
+        # The window draws its own title bar (the banner), so it can be minimized from there.
+        $form = New-Object RushUi.Window
         $form.Text = "RushVR"
-        $form.ClientSize = New-Object System.Drawing.Size(736, (618 + $dy))
+        $form.ClientSize = New-Object System.Drawing.Size(736, (618 + $dy + 34))
         $form.StartPosition = "CenterScreen"
-        $form.FormBorderStyle = "FixedDialog"
-        $form.MaximizeBox = $false
-        $form.MinimizeBox = $false
         $form.TopMost = $true
         $form.BackColor = [RushUi.Theme]::Back
         $form.ForeColor = $cText
@@ -1200,8 +1621,25 @@ function Show-MenuModern {
         $tips.InitialDelay = 300
         $tips.AutoPopDelay = 15000
 
-        [void](New-Label $form "RushVR" 24 14 300 38 $cText 21 "Segoe UI Semibold")
-        [void](New-Label $form "Until Dawn: Rush of Blood on your PC, in your headset" 26 52 500 22 $cDim 9.5)
+        # The banner: name, edition, version, and the minimize and close buttons.
+        $header = New-Object RushUi.Header
+        $header.SetBounds(1, 1, 734, 84)
+        $header.Badge = $(if ($motionEdition) { "MOTION" } else { "FREE" })
+        $header.BadgeSolid = $motionEdition
+        $header.Version = $launcherVersion
+        $form.Controls.Add($header)
+        $minimizeButton = New-Object RushUi.CaptionButton
+        $minimizeButton.Kind = 0
+        $minimizeButton.SetBounds(642, 0, 46, 34)
+        $header.Controls.Add($minimizeButton)
+        $closeButton = New-Object RushUi.CaptionButton
+        $closeButton.Kind = 1
+        $closeButton.SetBounds(688, 0, 46, 34)
+        $header.Controls.Add($closeButton)
+        $minimizeButton.Add_Click({ $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized })
+        $closeButton.Add_Click({ $form.DialogResult = [System.Windows.Forms.DialogResult]::Cancel })
+        $tips.SetToolTip($minimizeButton, "Minimize")
+        $tips.SetToolTip($closeButton, "Close")
 
         # Headset.
         $headset = New-Card "Headset" 24 92 332 170
@@ -1355,6 +1793,29 @@ function Show-MenuModern {
         $moveOn.Add_CheckedChanged($moveEnable)
         & $moveEnable
 
+        # The strip along the bottom: what the game will start with.
+        $status = New-Object RushUi.StatusBar
+        $status.SetBounds(1, ($form.ClientSize.Height - 33), 734, 32)
+        $form.Controls.Add($status)
+        $runtimeShort = @("Automatic", "Virtual Desktop", "SteamVR")
+        $updateStatus = {
+            $gameText = "Game found"
+            $gameOk = $true
+            if ($info -and $info.Count -gt 0) {
+                $gameText = "Game " + $info["TITLE_ID"] + " " + $info["APP_VER"]
+                $gameOk = ($info["TITLE_ID"] -eq $madeFor -and $info["APP_VER"] -eq "01.00")
+            }
+            $status.Ok = $gameOk
+            $status.Items = [string[]]@(
+                $gameText,
+                ("Headset: " + $runtimeShort[$runtimeBox.SelectedIndex]),
+                ("Controllers: " + $(if ($moveOn.Checked) { "Quest, as Move wands" } else { "DualSense" }))
+            )
+        }
+        $runtimeBox.Add_SelectedIndexChanged($updateStatus)
+        $moveOn.Add_CheckedChanged($updateStatus)
+        & $updateStatus
+
         # Bottom row.
         $neo = New-Object RushUi.Toggle
         $neo.Text = "PS4 Pro mode (sharper textures)"
@@ -1382,7 +1843,6 @@ function Show-MenuModern {
         $form.Controls.Add($quit)
         $form.CancelButton = $quit
 
-        [RushUi.Theme]::DarkTitleBar($form)
     } catch {
         $script:windowError = $_.Exception.Message
         return

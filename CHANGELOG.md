@@ -3,6 +3,20 @@
 All notable changes to RushVR, newest first. RushVR is shadPS4 plus a VR layer and the fixes that
 let Until Dawn: Rush of Blood run under emulation.
 
+## 0.3.6 - 2026-10-19
+
+A new look for the start-up window. The emulator itself is that of 0.3.5.
+
+- **Cinematic horror look**: near-black with dried-blood crimson, a banner with the name, blood
+  running from the top edge, scratches and fine grit over the window, sharp-cornered cards with a
+  crimson marker, the edition badge (FREE or MOTION) and the version.
+- **Minimize**: the window has its own title bar now, with minimize and close buttons, and it
+  can be dragged by the banner.
+- **A status line** along the bottom shows what the game will start with: the game found, the
+  headset connection, and the controllers (it follows the choices as you change them).
+- **Smoother**: the window fades in, the switches slide, and the buttons glow as the pointer
+  comes onto them.
+
 ## 0.3.5 - 2026-10-17
 
 The start-up window and the start file, ahead of the Motion edition (the Quest controllers playing

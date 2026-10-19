@@ -39,6 +39,12 @@ foreach ($path in "pc-vr\launch.ps1", "pc-vr\settings.txt", "Play Rush of Blood.
     Need (Join-Path $root $path) "file of the repository"
 }
 
+# The launcher shows its version in the window: it has to be this release's.
+$launcherText = [IO.File]::ReadAllText((Join-Path $root "pc-vr\launch.ps1"))
+if ($launcherText -notmatch ('\$launcherVersion = "' + [regex]::Escape($Version) + '"')) {
+    throw "pc-vr\launch.ps1 does not say version $Version (its `$launcherVersion line). Change it, commit, and run this again."
+}
+
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $utf8bom = New-Object System.Text.UTF8Encoding($true)
 function Write-Text([string]$path, [string]$text, $encoding = $utf8) {
@@ -124,8 +130,9 @@ through Virtual Desktop.
 5. In the game's own start-up question, choose the DualShock controller, not the Move
    controllers (they are not supported).
 
-What is new in $Version (the whole list is in CHANGELOG.md): one start file; a "Controllers" card in
-the start-up window for the Motion edition (greyed out in this one). From 0.3.0: the game runs at the
+What is new in $Version (the whole list is in CHANGELOG.md): a new, darker start-up window (its own
+title bar with minimize, a status line along the bottom). From 0.3.5: one start file; a "Controllers"
+card for the Motion edition (greyed out in this one). From 0.3.0: the game runs at the
 speed it was made for, with the captions in step with the voice, at 50 to 60 frames a second with a
 steady "Aim for" rate; the garbled textures are gone; textures are sharper; FXAA is back.
 
