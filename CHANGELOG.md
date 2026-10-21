@@ -5,9 +5,14 @@ let Until Dawn: Rush of Blood run under emulation.
 
 ## 0.4.0 - 2026-10-21
 
-Memory use at large picture sizes, and a few start-up window choices.
+Shadows that flickered are fixed, memory use at large picture sizes, and a few start-up window choices.
 
-- **Large `eye_width` (2688, 2880) no longer runs the PC out of memory.** The limit was the memory
+- **Shadows no longer flicker on and off.** The game draws its shadows into one large depth
+  picture, a few tiles a frame, and clears each tile before drawing it. The emulator cleared the
+  whole picture every time, so the shadows drawn earlier in the frame were wiped and which ones
+  survived changed from frame to frame. Now only the tile's own area is cleared
+  (`SHADPS4_FULL_DEPTH_CLEAR=1` brings the old behaviour back). The flashlight's own shadows can
+  still jump or show extra lines.- **Large `eye_width` (2688, 2880) no longer runs the PC out of memory.** The limit was the memory
   Windows can promise (RAM plus the page file), not the graphics card. The emulator now watches
   it and, when less than 3 GB is left, frees the pictures nothing has used for a while
   (`SHADPS4_COMMIT_GC_MB` changes the 3 GB, `SHADPS4_COMMIT_GC=0` turns it off). A bigger page

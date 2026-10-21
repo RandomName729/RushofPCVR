@@ -5,6 +5,7 @@ Bring your own copy of the game (US release, CUSA03683, version 1.00); nothing o
 
 ## What's new
 
+- **Shadows no longer flicker on and off.** (The flashlight's own shadows can still jump or show extra lines.)
 - **Large picture sizes (`eye_width` 2688 and 2880) no longer run the PC out of memory.** The limit
   was the memory Windows can promise (RAM plus the page file). The emulator now frees pictures
   nothing has used for a while when that gets low. Set a bigger Windows page file for the largest
@@ -22,7 +23,7 @@ rate to 120, then start `Play Rush of Blood.bat`. See the README in the zip.
 ## Known problems
 
 - The picture still looks pixelated or soft in places in the headset. Work continues.
-- Shadows (the flashlight's) can flicker or show extra lines.
+- The flashlight's shadows can still jump around or show extra lines (other shadows no longer flicker).
 - Now and then the game freezes for a second or more; the largest picture sizes can run slowly.
 - Levels 5 and later are untested; a long session in level 2 and later still needs testing.
 
