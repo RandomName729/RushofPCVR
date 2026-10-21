@@ -44,6 +44,11 @@
 #include "video_core/texture_cache/texture_cache.h"
 #include "video_core/texture_cache/tile_manager.h"
 
+namespace Vulkan {
+std::string DescribeProcessMemory();
+u64 GetCommitFreeBytes();
+} // namespace Vulkan
+
 namespace VideoCore {
 
 static constexpr u64 PageShift = 12;
@@ -2881,12 +2886,123 @@ void TextureCache::UntrackImageTail(ImageId image_id) {
     tracker.UpdatePageWatchers<false>(addr, size);
 }
 
+void TextureCache::LogMemoryStats(const char* why) {
+    constexpr double MB = 1024.0 * 1024.0;
+    struct Big {
+        u64 size{};
+        u32 width{};
+        u32 height{};
+        u32 samples{};
+        vk::Format format{};
+        bool depth{};
+    };
+    std::array<Big, 6> top{};
+    u64 count = 0;
+    u64 bytes = 0;
+    {
+        std::scoped_lock lock{mutex};
+        for (Image& image : slot_images) {
+            if (False(image.flags & ImageFlagBits::Registered)) {
+                continue;
+            }
+            ++count;
+            const u64 size = image.info.guest_size;
+            bytes += size;
+            if (size <= top.back().size) {
+                continue;
+            }
+            top.back() = Big{size,
+                             image.info.size.width,
+                             image.info.size.height,
+                             image.info.num_samples,
+                             image.info.pixel_format,
+                             image.info.props.is_depth != 0};
+            std::sort(top.begin(), top.end(),
+                      [](const Big& a, const Big& b) { return a.size > b.size; });
+        }
+    }
+    std::string largest;
+    for (const Big& big : top) {
+        if (big.size == 0) {
+            break;
+        }
+        largest += fmt::format(" {:.0f}MB({}x{} {}{}{})", big.size / MB, big.width, big.height,
+                               vk::to_string(big.format), big.samples > 1 ? " msaa" : "",
+                               big.depth ? " depth" : "");
+    }
+    const u64 budget_now = instance.GetDeviceMemoryBudgetNow();
+    mem_log_peak = std::max(mem_log_peak, total_used_memory);
+    LOG_INFO(Render_Vulkan,
+             "MEMSTAT {}: gpu_used={:.0f} MB (peak {:.0f}) gpu_budget_now={:.0f} MB "
+             "gc_budget={:.0f} MB gc_pressure={:.0f} MB gc_critical={:.0f} MB | images={} "
+             "guest_size={:.0f} MB largest:{} | {}",
+             why, total_used_memory / MB, mem_log_peak / MB, budget_now / MB,
+             instance.GetTotalMemoryBudget() / MB, pressure_gc_memory / MB,
+             critical_gc_memory / MB, count, bytes / MB, largest.empty() ? " none" : largest,
+             ::Vulkan::DescribeProcessMemory());
+}
+
 void TextureCache::RunGarbageCollector() {
     SCOPE_EXIT {
         ++gc_tick;
     };
     if (instance.CanReportMemoryUsage()) {
         total_used_memory = instance.GetDeviceMemoryUsage();
+    }
+    {
+        // A line in the log every ten seconds, and one whenever the video memory in use has
+        // grown by 256 MB since the last: the last one before a crash says what it was doing.
+        static const bool mem_log = [] {
+            const char* value = std::getenv("SHADPS4_MEM_LOG");
+            return value == nullptr || std::atoi(value) != 0;
+        }();
+        if (mem_log) {
+            const auto now = std::chrono::steady_clock::now();
+            const bool grew = total_used_memory > mem_log_usage + 256ull * 1024 * 1024;
+            if (grew || now - mem_log_time > std::chrono::seconds(10)) {
+                mem_log_time = now;
+                mem_log_usage = total_used_memory;
+                LogMemoryStats(grew ? "grew" : "tick");
+            }
+        }
+    }
+    {
+        // The video memory in use is also taken from the PC's commit limit (RAM and page file
+        // together), which at high resolutions runs out long before the video memory does. When
+        // little is left, the images nothing has used for a while go as if the video memory were
+        // full: up to about 512 MB a pass until the commit has room again.
+        // SHADPS4_COMMIT_GC=0 turns it off, SHADPS4_COMMIT_GC_MB=<n> sets the room it keeps
+        // (3072 MB, and the critical half of it).
+        static const u64 keep_free = [] {
+            const char* off = std::getenv("SHADPS4_COMMIT_GC");
+            if (off != nullptr && std::atoi(off) == 0) {
+                return u64{0};
+            }
+            const char* mb = std::getenv("SHADPS4_COMMIT_GC_MB");
+            const s64 value = mb != nullptr ? std::atoi(mb) : 3072;
+            return value > 0 ? static_cast<u64>(value) * 1024 * 1024 : u64{0};
+        }();
+        if (keep_free != 0) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - commit_check_time > std::chrono::milliseconds(250)) {
+                commit_check_time = now;
+                commit_free = ::Vulkan::GetCommitFreeBytes();
+            }
+            if (commit_free < keep_free) {
+                const u64 target = commit_free < keep_free / 2 ? critical_gc_memory + (512ull << 20)
+                                                               : pressure_gc_memory + (512ull << 20);
+                if (total_used_memory < target) {
+                    if (now - commit_log_time > std::chrono::seconds(5)) {
+                        commit_log_time = now;
+                        LOG_WARNING(Render_Vulkan,
+                                    "The PC has {} MB of commit left: freeing images nothing has "
+                                    "used for a while",
+                                    commit_free >> 20);
+                    }
+                    total_used_memory = target;
+                }
+            }
+        }
     }
     if (total_used_memory < trigger_gc_memory) {
         return;

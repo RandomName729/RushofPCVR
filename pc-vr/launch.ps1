@@ -49,18 +49,38 @@ function Save-Setting([string]$key, [string]$value) {
 Read-Settings
 
 # The Motion edition (the one with the Quest controllers playing as PlayStation Move wands) has a
-# file "edition.txt" saying "motion" next to this launcher. Without it the choice of controllers
-# below stays switched off: the emulator of the free edition has no Move support in it.
+# file "license.dat" next to this launcher, signed by the maker (ECDSA P-256; this launcher holds
+# only the public key). Without a valid one the choice of controllers below stays switched off: the
+# emulator of the free edition has no Move support in it, and the Motion emulator checks the same
+# file itself. Changing the text of the file breaks the signature.
+$licensePublicKey = "ce24b402a7cf69a13d6db787f873722ccb6302432069fc63ad7e0470cf3dfc41e3d2d62d23684aa3df447db9c9fc53364e7fb428d65d830a8d9cbad7d0b27592"
 function Test-MotionEdition {
     try {
-        $marker = Join-Path $here "edition.txt"
-        if (Test-Path -LiteralPath $marker) { return ([IO.File]::ReadAllText($marker) -match '(?i)motion') }
+        if ($licensePublicKey -notmatch '^[0-9a-fA-F]{128}$') { return $false }
+        $path = Join-Path $here "license.dat"
+        if (-not (Test-Path -LiteralPath $path)) { return $false }
+        $lines = @([IO.File]::ReadAllLines($path) | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+        if ($lines.Count -lt 3) { return $false }
+        $last = $lines[$lines.Count - 1]
+        if (-not $last.StartsWith("signature=")) { return $false }
+        $body = @($lines[0..($lines.Count - 2)])
+        if ($body[0] -ne "RushVR-Motion-License-1" -or ($body -notcontains "edition=motion")) { return $false }
+        $payload = [Text.Encoding]::UTF8.GetBytes(($body -join "`n"))
+        $signature = [Convert]::FromBase64String($last.Substring(10))
+        # A BCRYPT_ECCKEY_BLOB: the magic "ECS1" (ECDSA public P-256), the key size 32, X and Y.
+        $blob = New-Object byte[] 72
+        [BitConverter]::GetBytes([uint32]0x31534345).CopyTo($blob, 0)
+        [BitConverter]::GetBytes([uint32]32).CopyTo($blob, 4)
+        for ($i = 0; $i -lt 64; $i++) { $blob[8 + $i] = [Convert]::ToByte($licensePublicKey.Substring($i * 2, 2), 16) }
+        $cng = [Security.Cryptography.CngKey]::Import($blob, [Security.Cryptography.CngKeyBlobFormat]::EccPublicBlob)
+        $ecdsa = New-Object Security.Cryptography.ECDsaCng($cng)
+        return [bool]$ecdsa.VerifyData($payload, $signature, [Security.Cryptography.HashAlgorithmName]::SHA256)
     } catch {}
     return $false
 }
 $motionEdition = Test-MotionEdition
 # The version shown in the window's banner (the release scripts check that it is the release's).
-$launcherVersion = "0.3.6"
+$launcherVersion = "0.3.7"
 
 # PS4 Pro mode ("neo_mode" in user\config.json): the emulator then tells the game it runs on a
 # PlayStation 4 Pro, which gives sharper textures. The emulator reads it as it starts.
@@ -1606,7 +1626,7 @@ function Show-MenuModern {
         $cDim = [RushUi.Theme]::Dim
         $cAccent = [RushUi.Theme]::Accent
         # The controllers card sits above the bottom row.
-        $dy = 124
+        $dy = 190
 
         # The window draws its own title bar (the banner), so it can be minimized from there.
         $form = New-Object RushUi.Window
@@ -1685,7 +1705,7 @@ function Show-MenuModern {
 
         [void](New-Label $picture "Field of view" 18 158 170 20 $cDim 9)
         $fovValue = New-Label $picture "" 188 158 126 20 $cAccent 9.5 "Segoe UI Semibold" "TopRight"
-        $fovStart = [math]::Max(14, [math]::Min(32, [int]([int](Setting "fov" "120") / 5)))
+        $fovStart = [math]::Max(14, [math]::Min(32, [int]([int](Setting "fov" "105") / 5)))
         $fov = New-Slider $picture 14 32 $fovStart 18 178 296
         $fovText = New-Label $picture "" 18 212 296 34 $cDim 8.5
         $ofPsvr = (Setting "fov_of" "psvr") -eq "psvr"
@@ -1693,7 +1713,9 @@ function Show-MenuModern {
             $percent = $fov.Value * 5
             $fovValue.Text = "$percent%"
             if ($percent -eq 100) {
-                $fovText.Text = $(if ($ofPsvr) { "PlayStation VR's own view." } else { "All that the headset shows." })
+                $fovText.Text = $(if ($ofPsvr) { "PlayStation VR's own view: the sharpest picture, with a dark border." } else { "All that the headset shows." })
+            } elseif ($percent -eq 105 -and $ofPsvr) {
+                $fovText.Text = "A little wider than PlayStation VR's own view: sharp, with hardly a border."
             } elseif ($percent -eq 120 -and $ofPsvr) {
                 $fovText.Text = "The smoothest picture, no borders (the corners are black)."
             } elseif ($percent -eq 155 -and $ofPsvr) {
@@ -1708,7 +1730,7 @@ function Show-MenuModern {
         & $updateFov
 
         # Picture quality.
-        $quality = New-Card "Picture quality" 24 278 332 248
+        $quality = New-Card "Picture quality" 24 278 332 314
         $form.Controls.Add($quality)
         $anisoKeys = @("0", "2", "4", "8", "16")
         $anisoNames = @("Off (as the game draws)", "2x", "4x", "8x", "16x (recommended)")
@@ -1722,14 +1744,20 @@ function Show-MenuModern {
         $fxaaBox = New-Dropdown $quality $fxaaNames (Find-Nearest ([double[]]$fxaaKeys) (Read-Number "fxaa" 0.65)) 18 132 296
         $tips.SetToolTip($fxaaBox, "Smooths the jagged edges of the picture on its way to the headset. A larger resolution of each eye does it best.")
 
-        $maskKeys = @("0", "0.94", "0.97", "1", "1.05")
-        $maskNames = @("Off: the coloured corners show", "Tighter (0.94)", "Tight (0.97)", "On (1.0): black corners", "Loose (1.05)")
+        $maskKeys = @("0", "0.82", "0.86", "0.9", "0.94", "0.97", "1", "1.05")
+        $maskNames = @("Off: the coloured corners show", "Tightest (0.82)", "Very tight (0.86)", "Tighter still (0.9, recommended)", "Tighter (0.94)", "Tight (0.97)", "On (1.0): black corners", "Loose (1.05)")
         [void](New-Label $quality "Black corners (mask)" 18 178 296 20 $cDim 9)
-        $maskBox = New-Dropdown $quality $maskNames (Find-Nearest ([double[]]$maskKeys) (Read-Number "mask" 1)) 18 198 296
-        $tips.SetToolTip($maskBox, "Black instead of the coloured corners outside the lens circles. Tighter or Tight if some colour is left at the edge; Loose if the picture's edge is cut off.")
+        $maskBox = New-Dropdown $quality $maskNames (Find-Nearest ([double[]]$maskKeys) (Read-Number "mask" 0.9)) 18 198 296
+        $tips.SetToolTip($maskBox, "Black instead of the coloured corners outside the lens circles. Tighter or Tight if some colour is left at the edge (the lower, the more is black; a narrow field of view needs a lower one); Loose if the picture's edge is cut off.")
+
+        $sharpKeys = @("0", "0.15", "0.3", "0.5", "0.7", "1")
+        $sharpNames = @("Off", "Light (0.15)", "Normal (0.3, recommended)", "Strong (0.5)", "Very strong (0.7)", "Maximum (1.0)")
+        [void](New-Label $quality "Sharpening" 18 244 296 20 $cDim 9)
+        $sharpBox = New-Dropdown $quality $sharpNames (Find-Nearest ([double[]]$sharpKeys) (Read-Number "sharpen" 0.3)) 18 264 296
+        $tips.SetToolTip($sharpBox, "Sharpens the picture on its way to the headset. Virtual Desktop has its own sharpening (Streaming tab) that adds to this one: if the picture looks crunchy or blocky, lower either of them. With Virtual Desktop's at 50% or more, try Off or Light here.")
 
         # Frame rate.
-        $rate = New-Card "Frame rate" 380 360 332 166
+        $rate = New-Card "Frame rate" 380 360 332 232
         $form.Controls.Add($rate)
         $targetKeys = @("0", "30", "35", "40", "45", "50", "60")
         $targetNames = @("Original timing (the game's own pace)", "30 a second", "35 a second", "40 a second (steady at 80 Hz)", "45 a second (steady at 90 Hz)", "50 a second", "60 a second (recommended, 120 Hz)")
@@ -1737,7 +1765,7 @@ function Show-MenuModern {
         [void](New-Label $rate "The emulator holds the game to this rate. 60 is the game's own and looks smoothest with Virtual Desktop's frame rate at 120 (Streaming tab); at 90 or 80 use 45 or 40. Lower is steadier on a slower PC." 18 90 296 66 $cDim 8.5)
 
         # Controllers: the DualSense, or the Quest controllers playing as Move wands (Motion edition).
-        $moveCard = New-Card "Controllers" 24 540 688 108
+        $moveCard = New-Card "Controllers" 24 606 688 108
         $form.Controls.Add($moveCard)
         $moveOn = New-Object RushUi.Toggle
         $moveOn.Text = $(if ($motionEdition) { "Quest controllers as Move wands" } else { "Quest controllers as Move wands (Motion edition)" })
@@ -1746,15 +1774,15 @@ function Show-MenuModern {
         $moveOn.Enabled = $motionEdition
         $moveCard.Controls.Add($moveOn)
         $tips.SetToolTip($moveOn, "Plays with the Quest controllers, as the game's two PlayStation Move wands, instead of the DualSense. In the game's start-up question choose the Move controllers. Motion edition only.")
-        $moveDefaults = @(35, 35, 42)
+        $moveDefaults = @(35, 55, 65)
         $moveKeys = @("move_pitch", "move_reach", "move_turn")
         $moveTitles = @("Aim angle", "Reach", "Turning")
         $moveLimits = @(@(0, 90), @(5, 130), @(5, 130))
         $moveUnits = @(" degrees up", "%", "%")
         $moveTips = @(
             "Raises the in-game gun from the way the Quest controller points. A Quest controller's handle is tilted down from where you point it, so with 0 the guns follow the handle and point lower than you aim. Raise it if they point down when your controller is straight ahead, lower it if they point up. Recommended: 35.",
-            "How far the in-game hands move when you move yours, measured from your head. 100% is as far as you really move. Lower it if the hands move too much. Recommended: 35% (the game itself exaggerates what its Move wands do).",
-            "How much the in-game guns turn when you turn your wrist, measured from level and facing where you face. 100% is as far as you really turn. Lower it if the aim is too touchy. Recommended: 42%."
+            "How far the in-game hands move when you move yours, measured from your head. 100% is as far as you really move. Lower it if the hands move too much. Recommended: 55%.",
+            "How much the in-game guns turn when you turn your wrist, measured from level and facing where you face. 100% is as far as you really turn. Lower it if the aim is too touchy. Recommended: 65%."
         )
         $moveSliders = @()
         $moveValues = @()
@@ -1855,6 +1883,7 @@ function Show-MenuModern {
     Save-Setting "aniso" ($anisoKeys[$anisoBox.SelectedIndex])
     Save-Setting "fxaa" ($fxaaKeys[$fxaaBox.SelectedIndex])
     Save-Setting "mask" ($maskKeys[$maskBox.SelectedIndex])
+    Save-Setting "sharpen" ($sharpKeys[$sharpBox.SelectedIndex])
     Save-Setting "target_fps" ($targetKeys[$targetBox.SelectedIndex])
     Save-Setting "fov" ($fov.Value * 5)
     if ($motionEdition) {
@@ -1920,7 +1949,7 @@ if ($width -gt 1152) { $env:SHADPS4_ROB_EYE_WIDTH = "$width" }
 $env:SHADPS4_VR_SHARPEN = Setting "sharpen" "0.3"
 # mask: the coloured corners outside the two lens circles go black (0 off, 1 as drawn).
 $mask = 0.0
-if (-not [double]::TryParse((Setting "mask" "1"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$mask)) { $mask = 1.0 }
+if (-not [double]::TryParse((Setting "mask" "0.9"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$mask)) { $mask = 0.9 }
 $mask = [math]::Max(0.0, [math]::Min(2.0, $mask))
 if ($mask -gt 0) { $env:SHADPS4_VR_MASK = $mask.ToString([System.Globalization.CultureInfo]::InvariantCulture) }
 # aniso: anisotropic filtering of the game's textures (0 as the game draws them, 2 to 16).
@@ -1956,7 +1985,7 @@ if ((Setting "predict_ms") -ne "") { $env:SHADPS4_XR_PREDICT_MS = Setting "predi
 if ((Setting "stick_touchpad" "1") -eq "0") { $env:SHADPS4_STICK_TOUCHPAD = "0" }
 if ((Setting "surround" "1") -eq "0") { $env:SHADPS4_VIRTUAL_SURROUND = "0" }
 if ((Setting "real_time" "1") -eq "0") { $env:SHADPS4_TITLE_TIMESTEP = "0" }
-$fovSetting = Setting "fov" "120"
+$fovSetting = Setting "fov" "105"
 if ($fovSetting -ne "100") { $env:SHADPS4_VR_FOV = $fovSetting }
 # fov_of: what fov is a percent of. headset: what the headset being worn shows, all of it at 100
 # (the emulator asks the headset as it starts). psvr: a PlayStation VR's, as the game was made.

@@ -3,6 +3,24 @@
 All notable changes to RushVR, newest first. RushVR is shadPS4 plus a VR layer and the fixes that
 let Until Dawn: Rush of Blood run under emulation.
 
+## 0.3.7 - 2026-10-21
+
+Memory use at large picture sizes, and a few start-up window choices.
+
+- **Large `eye_width` (2688, 2880) no longer runs the PC out of memory.** The limit was the memory
+  Windows can promise (RAM plus the page file), not the graphics card. The emulator now watches
+  it and, when less than 3 GB is left, frees the pictures nothing has used for a while
+  (`SHADPS4_COMMIT_GC_MB` changes the 3 GB, `SHADPS4_COMMIT_GC=0` turns it off). A bigger page
+  file helps (see the README).
+- **Memory lines in the log**: a `MEMSTAT` line every ten seconds (or when it grows by 256 MB)
+  with the graphics card's use, the picture cache, and how much memory the game and the PC have
+  (`SHADPS4_MEM_LOG=0` turns it off).
+- **Sharpening** has its own choice in the start-up window (Picture quality), from Off to Maximum.
+  Virtual Desktop sharpens too; the two add up, so lower one of them if the picture looks crunchy.
+- **Black corners (mask)** has three tighter choices (0.9, 0.86, 0.82), which a narrow field of
+  view needs to hide the coloured corners.
+- Defaults: field of view 105 (sharp, with hardly a border) and mask 0.9.
+
 ## 0.3.6 - 2026-10-19
 
 A new look for the start-up window. The emulator itself is that of 0.3.5.

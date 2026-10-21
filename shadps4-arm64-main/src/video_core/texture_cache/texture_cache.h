@@ -11,6 +11,7 @@
 #include <queue>
 #include <tsl/robin_map.h>
 
+#include <chrono>
 #include "common/lru_cache.h"
 #include "common/slot_vector.h"
 #include "shader_recompiler/resource.h"
@@ -229,6 +230,10 @@ public:
     /// Runs the garbage collector.
     void RunGarbageCollector();
 
+    /// Writes a MEMSTAT line to the log: how much video memory the program uses, the largest
+    /// images, and what the PC has left. SHADPS4_MEM_LOG=0 turns the periodic ones off.
+    void LogMemoryStats(const char* why);
+
     template <typename Func>
     void ForEachImageInRegion(VAddr cpu_addr, size_t size, Func&& func) {
         using FuncReturn = typename std::invoke_result<Func, ImageId, Image&>::type;
@@ -365,6 +370,12 @@ private:
     u64 pressure_gc_memory = 0;
     u64 critical_gc_memory = 0;
     u64 gc_tick = 0;
+    std::chrono::steady_clock::time_point mem_log_time{};
+    u64 mem_log_usage = 0;
+    u64 mem_log_peak = 0;
+    std::chrono::steady_clock::time_point commit_check_time{};
+    std::chrono::steady_clock::time_point commit_log_time{};
+    u64 commit_free = ~u64{0};
     Common::LeastRecentlyUsedCache<ImageId, u64> lru_cache;
     bool readback_linear_images;
     PageTable page_table;

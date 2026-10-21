@@ -137,6 +137,10 @@ private:
     /// Writes a thumbnail of every image the guest GPU rendered into to <UserDir>/rt_dump.
     void DumpGpuImages();
 
+    /// Writes every 16-bit depth image of 256x256 or more (the games' shadow maps) as a grey
+    /// picture to <UserDir>/depth_dump/f<frame>_<address>.png.
+    void DumpDepthImages(u32 frame_index);
+
     void RecreateFrame(Frame* frame, u32 width, u32 height);
 
     void SetExpectedGameSize(s32 width, s32 height);

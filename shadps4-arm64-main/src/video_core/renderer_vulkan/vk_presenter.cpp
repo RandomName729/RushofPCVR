@@ -870,8 +870,26 @@ HmdFrames Presenter::PrepareHmdFrame(std::span<const AmdGpu::Image, 2> eye_textu
         const auto dump_flag =
             Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "dump_render_targets";
         static u32 frames_until_check = 0;
+        static u32 depth_dump_frames_left = 0;
+        constexpr u32 DepthDumpFrames = 12;
+        if (depth_dump_frames_left > 0) {
+            // One picture set per presented frame, to tell a shadow map that is drawn wrongly
+            // from one that is only read wrongly.
+            DumpDepthImages(DepthDumpFrames - depth_dump_frames_left);
+            --depth_dump_frames_left;
+        }
         if (frames_until_check-- == 0) {
             frames_until_check = 120;
+            // Creating <UserDir>/dump_depth saves the 16-bit depth images (shadow maps) of the
+            // next 12 presented frames to <UserDir>/depth_dump.
+            const auto depth_flag =
+                Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "dump_depth";
+            if (std::filesystem::exists(depth_flag, ec)) {
+                std::filesystem::remove(depth_flag, ec);
+                LOG_WARNING(Render_Vulkan, "depth dump requested: the next {} frames are saved",
+                            DepthDumpFrames);
+                depth_dump_frames_left = DepthDumpFrames;
+            }
             if (std::filesystem::exists(dump_flag, ec)) {
                 std::filesystem::remove(dump_flag, ec);
                 DumpGpuImages();
@@ -1225,6 +1243,88 @@ bool Presenter::DeliverHmdFrame(Frame* frame, const Core::Vr::PresentedFrame& in
     }
     vr_exporter->Deliver(frame, info);
     return true;
+}
+
+void Presenter::DumpDepthImages(u32 frame_index) {
+    const auto dump_dir = Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "depth_dump";
+    std::error_code ec;
+    std::filesystem::create_directories(dump_dir, ec);
+
+    // Collect first: transitions and submits below must not run under the cache lock.
+    std::vector<VideoCore::Image*> images;
+    texture_cache.ForEachImage([&](VideoCore::Image& image) {
+        const auto& info = image.info;
+        if (info.props.is_depth && info.pixel_format == vk::Format::eD16Unorm &&
+            info.size.width >= 256 && info.size.height >= 256 && info.num_samples == 1) {
+            images.push_back(&image);
+        }
+    });
+
+    for (VideoCore::Image* image : images) {
+        const auto& info = image->info;
+        const u32 width = info.size.width;
+        const u32 height = info.size.height;
+
+        ScreenshotReadback readback{instance,
+                                    draw_scheduler,
+                                    ScreenshotKind::GameOnly,
+                                    {},
+                                    width,
+                                    height,
+                                    vk::Format::eR8G8B8A8Unorm,
+                                    false};
+
+        draw_scheduler.EndRendering();
+        const auto cmdbuf = draw_scheduler.CommandBuffer();
+        image->Transit(vk::ImageLayout::eTransferSrcOptimal, vk::AccessFlagBits2::eTransferRead, {},
+                       cmdbuf);
+        const vk::BufferImageCopy region = {
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource =
+                {
+                    .aspectMask = vk::ImageAspectFlagBits::eDepth,
+                    .mipLevel = 0,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {width, height, 1},
+        };
+        cmdbuf.copyImageToBuffer(image->GetImage(), vk::ImageLayout::eTransferSrcOptimal,
+                                 readback.buffer.Handle(), region);
+        draw_scheduler.Finish();
+
+        // Depth16 values; cleared texels (1.0) show white, the rest is stretched from the
+        // nearest value up to white so that a map that only differs a little is still visible.
+        const auto* depth = reinterpret_cast<const u16*>(readback.buffer.mapped_data.data());
+        const size_t count = static_cast<size_t>(width) * height;
+        u32 nearest = 0xffff;
+        size_t drawn = 0;
+        for (size_t i = 0; i < count; ++i) {
+            if (depth[i] != 0xffff) {
+                nearest = std::min<u32>(nearest, depth[i]);
+                ++drawn;
+            }
+        }
+        const u32 span = std::max<u32>(0xffff - nearest, 1);
+        std::vector<u8> rgba(count * 4);
+        for (size_t i = 0; i < count; ++i) {
+            const u32 value = depth[i];
+            const u32 grey = value == 0xffff ? 255 : ((value - nearest) * 255 / span);
+            rgba[i * 4 + 0] = static_cast<u8>(grey);
+            rgba[i * 4 + 1] = static_cast<u8>(grey);
+            rgba[i * 4 + 2] = static_cast<u8>(grey);
+            rgba[i * 4 + 3] = 0xff;
+        }
+        const auto path = dump_dir / fmt::format("f{:02}_{:x}.png", frame_index,
+                                                 info.guest_address);
+        WritePng(path, rgba, width, height);
+        LOG_WARNING(Render_Vulkan,
+                    "depth dump f{:02} {:#x} {}x{}: {} of {} texels drawn, nearest {}", frame_index,
+                    info.guest_address, width, height, drawn, count, nearest);
+    }
 }
 
 void Presenter::DumpGpuImages() {

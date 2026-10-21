@@ -35,6 +35,10 @@
 #endif
 #include <windows.h>
 #include <tlhelp32.h>
+#ifndef PSAPI_VERSION
+#define PSAPI_VERSION 2
+#endif
+#include <psapi.h>
 #endif
 
 namespace Vulkan {
@@ -344,9 +348,56 @@ void LogThreadCpuUsage(double seconds) {
     }
 }
 
+/// What the whole machine and this process hold in memory, for SHADPS4's memory log: it shows
+/// whether the game is running out of the PC's memory (physical or commit) rather than the
+/// graphics card's.
+std::string DescribeProcessMemory() {
+    constexpr double MB = 1024.0 * 1024.0;
+    MEMORYSTATUSEX system{};
+    system.dwLength = sizeof(system);
+    PROCESS_MEMORY_COUNTERS_EX process{};
+    process.cb = sizeof(process);
+    const bool have_system = GlobalMemoryStatusEx(&system) != FALSE;
+    const bool have_process =
+        GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&process),
+                             sizeof(process)) != FALSE;
+    std::string text;
+    if (have_process) {
+        text += fmt::format("process working_set={:.0f} MB private={:.0f} MB peak_working_set={:.0f} MB "
+                            "peak_pagefile={:.0f} MB",
+                            process.WorkingSetSize / MB, process.PrivateUsage / MB,
+                            process.PeakWorkingSetSize / MB, process.PeakPagefileUsage / MB);
+    }
+    if (have_system) {
+        text += fmt::format(" | pc ram_free={:.0f}/{:.0f} MB commit_free={:.0f}/{:.0f} MB",
+                            system.ullAvailPhys / MB, system.ullTotalPhys / MB,
+                            system.ullAvailPageFile / MB, system.ullTotalPageFile / MB);
+    }
+    return text;
+}
+
+/// What the PC can still commit (RAM and page file together); the game fails to get memory
+/// when this runs out, even with RAM and video memory to spare.
+u64 GetCommitFreeBytes() {
+    MEMORYSTATUSEX system{};
+    system.dwLength = sizeof(system);
+    if (GlobalMemoryStatusEx(&system) == FALSE) {
+        return ~u64{0};
+    }
+    return system.ullAvailPageFile;
+}
+
 #else
 
 void LogThreadCpuUsage(double) {}
+
+std::string DescribeProcessMemory() {
+    return {};
+}
+
+u64 GetCommitFreeBytes() {
+    return ~u64{0};
+}
 
 #endif
 

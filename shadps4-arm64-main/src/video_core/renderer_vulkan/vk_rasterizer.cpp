@@ -440,6 +440,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     pipeline->BindResources(set_writes, buffer_barriers, push_data);
     UpdateDynamicState(pipeline, is_indexed);
     scheduler.BeginRendering(state);
+    ApplyPartialDepthClear();
     scheduler.NoteDraw();
     FrameStats::Draw();
 
@@ -547,6 +548,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     pipeline->BindResources(set_writes, buffer_barriers, push_data);
     UpdateDynamicState(pipeline, is_indexed);
     scheduler.BeginRendering(state);
+    ApplyPartialDepthClear();
     scheduler.NoteDraw();
     FrameStats::Draw();
 
@@ -1780,9 +1782,29 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
         auto& image = texture_cache.GetImage(image_id);
 
         const auto slice = image_view.info.range.base.layer;
-        const bool is_depth_clear = regs.depth_render_control.depth_clear_enable ||
-                                    texture_cache.IsMetaCleared(htile_address, slice);
+        const bool explicit_depth_clear = regs.depth_render_control.depth_clear_enable;
+        bool is_depth_clear = explicit_depth_clear ||
+                              texture_cache.IsMetaCleared(htile_address, slice);
         const bool is_stencil_clear = regs.depth_render_control.stencil_clear_enable;
+        // A depth clear draw only clears the pixels of its rectangle. Titles that keep several
+        // shadow maps in one depth target clear each tile's rectangle before drawing into it;
+        // clearing the whole target for each of those wipes the tiles drawn before.
+        partial_depth_clear = false;
+        if (explicit_depth_clear && !is_stencil_clear && regs.depth_buffer.DepthValid()) {
+            static const bool full_clears = [] {
+                const char* value = std::getenv("SHADPS4_FULL_DEPTH_CLEAR");
+                return value != nullptr && value[0] != 0 && value[0] != '0';
+            }();
+            const u32 clear_width = std::min<u32>(state.width, image.info.size.width);
+            const u32 clear_height = std::min<u32>(state.height, image.info.size.height);
+            vk::Rect2D rect{};
+            if (!full_clears && GetDepthClearRect(clear_width, clear_height, rect)) {
+                partial_depth_clear = true;
+                partial_depth_clear_rect = rect;
+                partial_depth_clear_value = regs.depth_clear;
+                is_depth_clear = false;
+            }
+        }
         texture_cache.TouchMeta(htile_address, slice, false);
         ASSERT(desc.view_info.range.extent.levels == 1 && !image.binding.needs_rebind);
 
@@ -1818,7 +1840,79 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
         state.num_layers = 1;
     }
 
+    partial_depth_clear_layers = state.num_layers;
+
     return state;
+}
+
+bool Rasterizer::GetDepthClearRect(u32 width, u32 height, vk::Rect2D& rect) const {
+    const auto& regs = liverpool->regs;
+    const auto& vp_ctl = regs.viewport_control;
+    const auto& vp = regs.viewports[0];
+    if (regs.IsClipDisabled() || vp.xscale == 0 || vp.yscale == 0 || width == 0 || height == 0) {
+        return false;
+    }
+    const float xoffset = vp_ctl.xoffset_enable ? vp.xoffset : 0.f;
+    const float xscale = vp_ctl.xscale_enable ? vp.xscale : 1.f;
+    const float yoffset = vp_ctl.yoffset_enable ? vp.yoffset : 0.f;
+    const float yscale = vp_ctl.yscale_enable ? vp.yscale : 1.f;
+    float x0 = xoffset - std::abs(xscale);
+    float x1 = xoffset + std::abs(xscale);
+    float y0 = yoffset - std::abs(yscale);
+    float y1 = yoffset + std::abs(yscale);
+
+    const bool enable_offset = !regs.window_scissor.window_offset_disable;
+    const s32 wx = enable_offset ? regs.window_offset.window_x_offset : 0;
+    const s32 wy = enable_offset ? regs.window_offset.window_y_offset : 0;
+    s32 sx0 = std::max({s32(regs.screen_scissor.top_left_x), s32(regs.window_scissor.top_left_x) + wx,
+                        s32(regs.generic_scissor.top_left_x) + wx});
+    s32 sy0 = std::max({s32(regs.screen_scissor.top_left_y), s32(regs.window_scissor.top_left_y) + wy,
+                        s32(regs.generic_scissor.top_left_y) + wy});
+    s32 sx1 = std::min({s32(regs.screen_scissor.bottom_right_x),
+                        s32(regs.window_scissor.bottom_right_x) + wx,
+                        s32(regs.generic_scissor.bottom_right_x) + wx});
+    s32 sy1 = std::min({s32(regs.screen_scissor.bottom_right_y),
+                        s32(regs.window_scissor.bottom_right_y) + wy,
+                        s32(regs.generic_scissor.bottom_right_y) + wy});
+    if (regs.mode_control.vport_scissor_enable) {
+        sx0 = std::max(sx0, s32(regs.viewport_scissors[0].top_left_x));
+        sy0 = std::max(sy0, s32(regs.viewport_scissors[0].top_left_y));
+        sx1 = std::min(sx1, s32(regs.viewport_scissors[0].bottom_right_x));
+        sy1 = std::min(sy1, s32(regs.viewport_scissors[0].bottom_right_y));
+    }
+
+    const s32 left = std::max({0, s32(std::floor(x0)), sx0});
+    const s32 top = std::max({0, s32(std::floor(y0)), sy0});
+    const s32 right = std::min({s32(width), s32(std::ceil(x1)), sx1});
+    const s32 bottom = std::min({s32(height), s32(std::ceil(y1)), sy1});
+    if (left <= 0 && top <= 0 && right >= s32(width) && bottom >= s32(height)) {
+        return false;
+    }
+    rect.offset = {left, top};
+    rect.extent = {u32(std::max(right - left, 0)), u32(std::max(bottom - top, 0))};
+    return true;
+}
+
+void Rasterizer::ApplyPartialDepthClear() {
+    if (!partial_depth_clear) {
+        return;
+    }
+    partial_depth_clear = false;
+    if (partial_depth_clear_rect.extent.width == 0 || partial_depth_clear_rect.extent.height == 0) {
+        return;
+    }
+    const vk::ClearAttachment attachment = {
+        .aspectMask = vk::ImageAspectFlagBits::eDepth,
+        .colorAttachment = 0,
+        .clearValue = vk::ClearValue{.depthStencil = vk::ClearDepthStencilValue{
+                                         .depth = partial_depth_clear_value, .stencil = 0}},
+    };
+    const vk::ClearRect rect = {
+        .rect = partial_depth_clear_rect,
+        .baseArrayLayer = 0,
+        .layerCount = std::max<u32>(partial_depth_clear_layers, 1),
+    };
+    scheduler.CommandBuffer().clearAttachments(attachment, rect);
 }
 
 void Rasterizer::Resolve() {

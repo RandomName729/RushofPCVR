@@ -90,7 +90,8 @@ $defaults = @(
     "target_fps=60",
     "aniso=16",
     "fxaa=0.65",
-    "fov=120",
+    "fov=105",
+    "mask=0.9",
     "fov_of=psvr",
     "menu=1"
 )
@@ -130,8 +131,11 @@ through Virtual Desktop.
 5. In the game's own start-up question, choose the DualShock controller, not the Move
    controllers (they are not supported).
 
-What is new in $Version (the whole list is in CHANGELOG.md): a new, darker start-up window (its own
-title bar with minimize, a status line along the bottom). From 0.3.5: one start file; a "Controllers"
+What is new in $Version (the whole list is in CHANGELOG.md): large picture sizes (eye_width 2688 and
+2880) no longer run the PC out of memory (give Windows a big page file, see the README), a
+Sharpening choice, tighter Black corners choices, and a field of view of 105 by default. From 0.3.6:
+a new, darker start-up window (its own title bar with minimize, a status line along the bottom).
+From 0.3.5: one start file; a "Controllers"
 card for the Motion edition (greyed out in this one). From 0.3.0: the game runs at the
 speed it was made for, with the captions in step with the voice, at 50 to 60 frames a second with a
 steady "Aim for" rate; the garbled textures are gone; textures are sharper; FXAA is back.

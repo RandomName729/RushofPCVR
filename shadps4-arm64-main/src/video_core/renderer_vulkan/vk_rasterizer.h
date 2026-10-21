@@ -97,12 +97,22 @@ public:
 private:
     void PrepareRenderState(const GraphicsPipeline* pipeline);
     RenderState BeginRendering(const GraphicsPipeline* pipeline);
+    /// Clears what a rectangle-list depth clear covers (viewport and scissor), once the pass is
+    /// begun, when BeginRendering left the rest of the target alone.
+    void ApplyPartialDepthClear();
+    /// The part of a width x height target that a depth clear draw touches. Returns false when
+    /// that is all of it (or cannot be told), which is a plain clear of the attachment.
+    bool GetDepthClearRect(u32 width, u32 height, vk::Rect2D& rect) const;
     void Resolve();
     void DepthStencilCopy(bool is_depth, bool is_stencil);
     void EliminateFastClear();
 
     void UpdateDynamicState(const GraphicsPipeline* pipeline, bool is_indexed) const;
     void UpdateViewportScissorState() const;
+    bool partial_depth_clear = false;
+    vk::Rect2D partial_depth_clear_rect{};
+    float partial_depth_clear_value = 1.0f;
+    u32 partial_depth_clear_layers = 1;
     void UpdateDepthStencilState() const;
     void UpdatePrimitiveState(bool is_indexed) const;
     void UpdateRasterizationState() const;

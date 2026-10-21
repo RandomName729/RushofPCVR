@@ -14,7 +14,7 @@ depth buffers, its timing and resolution).
 
 ## Status
 
-**Early work in progress** (version 0.3.6), built and tested by one person on one PC and one Quest 3.
+**Early work in progress** (version 0.3.7), built and tested by one person on one PC and one Quest 3.
 See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 
 - The title screen, the intro and **levels 1 to 4** play through (the tester went as far as level
@@ -90,7 +90,7 @@ ignored, and each setting is explained in the file itself. The ones to know:
 
 | Setting | What it does |
 | --- | --- |
-| `fov` | How much of the headset's field of view the game draws, in percent. **120 is the default: the picture looks smoothest there, with no borders** (`mask` blacks out the coloured corners outside the game's lens-shaped circles). Less gives a sharper picture with a dark border; more draws a wider, softer view. |
+| `fov` | How much of the headset's field of view the game draws, in percent. **105 is the default: a little wider than a PlayStation VR's own view, sharp with hardly a border** (100 is the PlayStation VR's own view: sharpest, with a dark border) (`mask` blacks out the coloured corners outside the game's lens-shaped circles). More draws a wider, softer view with no border (120 and up). |
 | `fov_of` | What that percent is of: `psvr` (a PlayStation VR's own view, the default) or `headset`. |
 | `runtime` | Which OpenXR runtime the game uses: `pc` (the one the PC has set up, the default), `virtualdesktop`, `steamvr`, or the full path of a runtime's `.json` file. Also in the start-up window. |
 | `eye_width` | The width in pixels each eye is drawn at, 1152 to 2880 (the default is 1152). 1152 is what the console draws; larger is sharper in the headset, and slower, and takes more memory. |
@@ -99,7 +99,7 @@ ignored, and each setting is explained in the file itself. The ones to know:
 | `fxaa` | Smooths the picture's edges on its way to the headset: 0 off, 0.35 light, 0.65 normal (default), 1 strong. Also in the start-up window. |
 | `msaa`, `antialias` | Multisampling limits for games that use it. Rush of Blood draws without multisampling, so they change nothing here; use `fxaa` and a larger `eye_width` instead. |
 | `sharpen` | Sharpening of the picture on its way to the headset, 0 to 1. |
-| `mask` | Blacks out the coloured corners outside the two lens circles of the game's picture (1 = the circles as drawn, 0 = off). If the circle's edge looks cut off use 1.05; if some colour is left at the edge use 0.97. |
+| `mask` | Blacks out the coloured corners outside the two lens circles of the game's picture (1 = the circles as drawn, 0 = off; 0.9 is the default, the choices go from 0.82 to 1.05). If the circle's edge looks cut off use a higher value (1.05); if some colour is left at the edge use a lower one. |
 | `hands` | `0`: do not place the controller by your hands. |
 | `env` | Extra environment variables for the emulator, as many lines as needed. |
 
@@ -117,10 +117,17 @@ versions is no longer read: it is `eye_width` now.)
 - **The picture looks soft or pixelated**: the console draws each eye at only 1152 x 1296 pixels.
   Raise `eye_width` (the slider in the start-up window; 1152 is the default, 2880 the largest), keep
   "PS4 Pro mode" on, and in Virtual Desktop try a higher bitrate and HEVC 10-bit or AV1. A
-  smaller `fov` (100 is the game's own view) puts the same pixels over fewer degrees: sharper, with a
+  smaller `fov` (100 is the game's own view, 105 is the default) puts the same pixels over fewer degrees: sharper, with a
   dark border. `sharpen` can be raised a little.
 - **Four circles in the PC window**: the picture the game draws holds one circle for each eye;
   the window now shows that picture once (two circles). A Quest shows one circle in each eye.
+- **Windows runs out of memory at a large `eye_width`** (2688 and 2880 especially, the log says
+  something like "Insufficient system resources", or the game closes): Windows has a limit on
+  memory it can promise (RAM plus the page file), and the game asks for a lot of it. Give Windows a
+  bigger page file (Settings, System, About, Advanced system settings, Performance, Advanced,
+  Virtual memory: a custom size of 32768 MB initial and 49152 MB maximum on the system drive), and
+  restart the PC. The emulator also frees pictures nothing has used for a while when Windows
+  has less than 3 GB of that left, and writes `MEMSTAT` lines to the log every ten seconds.
 - **Slow or stuttering**: lower `eye_width` (1152 is the console's size), and set "Aim for" to half
   of Virtual Desktop's frame rate (60 at 120 Hz, 45 at 90 Hz, 40 at 80 Hz). To see where the time goes, add the line
   `env=SHADPS4_FRAME_STATS=1` to `settings.txt` and play for a minute: the log then gets a line
