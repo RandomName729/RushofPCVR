@@ -3,7 +3,7 @@
 All notable changes to RushVR, newest first. RushVR is shadPS4 plus a VR layer and the fixes that
 let Until Dawn: Rush of Blood run under emulation.
 
-## 0.3.7 - 2026-10-21
+## 0.4.0 - 2026-10-21
 
 Memory use at large picture sizes, and a few start-up window choices.
 

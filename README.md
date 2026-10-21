@@ -14,7 +14,7 @@ depth buffers, its timing and resolution).
 
 ## Status
 
-**Early work in progress** (version 0.3.7), built and tested by one person on one PC and one Quest 3.
+**Early work in progress** (version 0.4.0), built and tested by one person on one PC and one Quest 3.
 See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 
 - The title screen, the intro and **levels 1 to 4** play through (the tester went as far as level
