@@ -14,7 +14,7 @@ depth buffers, its timing and resolution).
 
 ## Status
 
-**Early work in progress** (version 0.4.0), built and tested by one person on one PC and one Quest 3.
+**Early work in progress** (version 0.4.1), built and tested by one person on one PC and one Quest 3.
 See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 
 - The title screen, the intro and **levels 1 to 4** play through (the tester went as far as level
@@ -60,7 +60,7 @@ See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 ## Installing and playing
 
 1. **Put the program in a folder with a short path**, e.g. `C:\Games\RushVR`. Some of the game's
-   files have long names. Since the 0.4.0 update of 22 October the emulator opens them even when
+   files have long names. Since 0.4.1 the emulator opens them even when
    the full path passes Windows' 260 characters (before, the game then showed long streaks of
    colour in level 2), but a short path is still the safest.
 2. **Put your copy of the game in its `games` folder**, anywhere in it: the game's folder or its

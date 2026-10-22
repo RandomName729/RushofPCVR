@@ -132,7 +132,10 @@ through Virtual Desktop.
 5. In the game's own start-up question, choose the DualShock controller, not the Move
    controllers (they are not supported).
 
-What is new in $Version (the whole list is in CHANGELOG.md): large picture sizes (eye_width 2688 and
+What is new in $Version (the whole list is in CHANGELOG.md): no more long streaks of colour in
+level 2 (the game's files with very long names can be opened now), a new start-up window with Low,
+Medium and High buttons and a choice of what the monitor shows, and higher default quality. From
+0.4.0: large picture sizes (eye_width 2688 and
 2880) no longer run the PC out of memory (give Windows a big page file, see the README), a
 Sharpening choice, tighter Black corners choices, and a field of view of 105 by default. From 0.3.6:
 a new, darker start-up window (its own title bar with minimize, a status line along the bottom).

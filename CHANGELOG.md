@@ -3,9 +3,10 @@
 All notable changes to RushVR, newest first. RushVR is shadPS4 plus a VR layer and the fixes that
 let Until Dawn: Rush of Blood run under emulation.
 
-## 0.4.0, update of 2026-10-22 (same version, the zips were replaced)
+## 0.4.1 - 2026-10-22
 
-The new start-up window and a fix for streaks of colour in level 2.
+The new start-up window and a fix for streaks of colour in level 2. (The paid Motion edition keeps
+the version number 0.4.0, with these same fixes.)
 
 - **Long streaks of colour covering the view in level 2 are fixed.** The game's texture files have
   long names (the cellar props, 200+ characters); unpacked in a deep folder their full path passed
@@ -14,8 +15,9 @@ The new start-up window and a fix for streaks of colour in level 2.
   to Windows in the long form (`SHADPS4_NO_LONG_PATHS=1` turns that off). A short folder such as
   `C:\Games\RushVR` is still the safest.
 - **Motion edition: unplug the DualSense.** While a PlayStation controller is connected to the PC
-  the game uses it and ignores the Quest controllers. The start-up window now warns when one is
-  connected (Retry after unplugging, or Ignore to play anyway), and the README says so.
+  the game uses it and ignores the Quest controllers. The start-up window warns when one is
+  connected (Retry after unplugging, or Ignore to play anyway). (Only the Motion edition has the
+  Quest controllers, so this concerns that edition.)
 - **New start-up window**: Low, Medium and High buttons for the picture, with settings that fold
   away (Picture quality, PC window); a "Picture size sent to the headset" choice; a "PC window"
   card to choose what the monitor shows (left eye, right eye, both eyes merged into one normal
