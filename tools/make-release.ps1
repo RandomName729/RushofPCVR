@@ -29,6 +29,11 @@ function Need([string]$path, [string]$what) {
     if (-not (Test-Path -LiteralPath $path)) { throw "Missing ${what}: $path" }
 }
 Need $Exe "emulator (build it first, see the top of this script)"
+# The free emulator must not have the Motion (paid) Quest/Move code in it: the build folder holds
+# the paid exe after a paid build. Build from main again, or pass the free exe with -Exe.
+if ([Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($Exe)).Contains("SHADPS4_QUEST_MOVE")) {
+    throw "$Exe has the paid Quest/Move code in it (it was built on the paid-build branch). Build the free emulator from main: git checkout main, then cmake --build shadps4-arm64-main\Build\x64-Clang-Release --target shadps4 (or give the free exe with -Exe)."
+}
 foreach ($name in "PkgTool.exe", "LibOrbisPkg.dll", "LICENSE.txt") {
     Need (Join-Path $PkgToolDir $name) "PkgTool file (see the top of this script)"
 }
@@ -47,6 +52,22 @@ if ($launcherText -notmatch ('\$launcherVersion = "' + [regex]::Escape($Version)
 
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $utf8bom = New-Object System.Text.UTF8Encoding($true)
+# Deletes a folder, also one holding files whose full path passes Windows' 260 characters (a game
+# copied into an earlier test folder): Remove-Item cannot, robocopy can (it empties the folder by
+# mirroring an empty one over it; junctions are not followed).
+function Remove-Tree([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return }
+    try {
+        Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+    } catch {
+        $empty = Join-Path ([IO.Path]::GetTempPath()) ("empty-" + [guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Path $empty | Out-Null
+        & robocopy $empty $path /MIR /XJ /NJH /NJS /NP /NFL /NDL | Out-Null
+        Remove-Item -LiteralPath $empty -Force -Recurse
+        Remove-Item -LiteralPath $path -Recurse -Force
+    }
+}
+
 function Write-Text([string]$path, [string]$text, $encoding = $utf8) {
     [IO.File]::WriteAllText($path, (($text -replace "`r`n", "`n") -replace "`n", "`r`n"), $encoding)
 }
@@ -54,7 +75,7 @@ function Write-Text([string]$path, [string]$text, $encoding = $utf8) {
 $name = "RushVR-$Version"
 $out = Join-Path $root "build\release"
 $pc = Join-Path $out "$name-PC-VR-Windows"
-if (Test-Path -LiteralPath $out) { Remove-Item -LiteralPath $out -Recurse -Force }
+Remove-Tree $out
 
 # The first user's home: without it the emulator asks at its first start whether to move saves
 # over from where an older shadPS4 kept them, in a message box behind the game.
