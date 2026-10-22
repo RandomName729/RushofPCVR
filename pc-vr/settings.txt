@@ -6,9 +6,10 @@
 # The size each eye is drawn at, in pixels of width: 1152 is the console's own (the picture of
 # a PlayStation 4, 1152x1296 an eye); the larger, the sharper in the headset, and the more
 # work for the graphics card and the more memory the game takes (1536 nearly doubles the
-# pixels, 2048 triples them, 2880 is six times and needs about 3.5 GB more memory).
-# 1152 to 2880; the window sets it with a slider.
-#eye_width=1152
+# pixels, 2048 triples them, 2880 is six times and needs about 3.5 GB more memory). 2304 is
+# the default (the Medium choice of the window), 2880 the largest (High). 1152 to 2880; the
+# window sets it with a slider.
+#eye_width=2304
 
 # Not used by this game: it picks its picture by itself, and does not draw smaller where the
 # graphics card falls behind. (The line stays so that older settings files remain valid.)
@@ -60,6 +61,20 @@
 # 0.65 normal (the default), 1 strong. Rush of Blood draws without multisampling, so this is
 # what smooths its edges; a bigger eye_width (supersampling) does it best. (The window sets it.)
 #fxaa=0.65
+
+# What the window of the game on the PC shows, which is also what a screen recording of it sees
+# (the headset is not affected): left or right, that eye's picture cropped to fill the window like
+# a normal game (left is the default); merged, both eyes joined into one flat picture; both, the
+# whole picture with both lens circles. pc_zoom, in percent: 100 fits the window with no black
+# corners, less is closer in, more shows more of the picture. (The window sets them.)
+#pc_view=left
+#pc_zoom=100
+
+# The size of the picture handed to the headset's runtime, in percent of the size the game draws
+# it at: 100, 75 or 50. It is shrunk to that here, with a smoother filter than Virtual Desktop's.
+# Smaller is lighter for the PC and the stream, and a little softer; a large eye_width (2048 and
+# more) looks smoother at 50, which is what it is when this is not set (below 2048: 100). (The window sets it, with the Low, Medium and High buttons.)
+#layer_scale=100
 
 # Which OpenXR runtime the game uses (also in the start-up window): pc, the one the PC has set
 # up (when Virtual Desktop's streamer was the last to set itself, that one); virtualdesktop,

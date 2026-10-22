@@ -116,7 +116,7 @@ function Set-NeoMode([bool]$on) {
 # The sizes an eye can be drawn at: the console's own (1152x1296: the game draws both eyes into
 # one picture of 2304x1296) and larger, all the same shape (the height is 9/8 of the width).
 $widths = @(1152, 1344, 1536, 1728, 1920, 2048, 2304, 2560, 2880)
-$defaultWidth = 1152
+$defaultWidth = 2304
 function EyeHeight([int]$width) { return [int]($width * 9 / 8) }
 $caps = @(120, 90, 72, 60, 45, 40, 36, 30)
 
@@ -249,8 +249,18 @@ namespace RushUi
 
     public class Card : Panel
     {
-        private Font titleFont = new Font("Segoe UI Semibold", 10.5f);
+        private Font titleFont = new Font("Segoe UI Semibold", 8.5f);
+        private Font summaryFont = new Font("Segoe UI", 8.5f);
+        private string summary;
+        private bool open = true;
+        private bool headHover;
         public string Title { get; set; }
+        // A card that can be folded: only its title row shows, with a one-line summary.
+        public bool Foldable { get; set; }
+        public event EventHandler Toggled;
+
+        public string Summary { get { return summary; } set { summary = value; Invalidate(); } }
+        public bool Open { get { return open; } set { open = value; Invalidate(); } }
 
         public Card()
         {
@@ -259,10 +269,24 @@ namespace RushUi
             BackColor = Theme.Card;
         }
 
+        // Capital letters with a little space between them; returns where it ended.
+        private static int Spaced(Graphics g, string text, Font font, Color color, int x, int y, int gap)
+        {
+            foreach (char ch in text)
+            {
+                if (ch == ' ') { x += 6; continue; }
+                string one = ch.ToString();
+                TextRenderer.DrawText(g, one, font, new Point(x, y), color, TextFormatFlags.NoPadding | TextFormatFlags.Left);
+                x += TextRenderer.MeasureText(g, one, font, new Size(200, 100), TextFormatFlags.NoPadding).Width + gap;
+            }
+            return x;
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
             g.Clear(Parent != null ? Parent.BackColor : Theme.Back);
+            if (Width < 8 || Height < 8) { return; }
             g.SmoothingMode = SmoothingMode.AntiAlias;
             using (GraphicsPath p = Theme.Round(new RectangleF(0.5f, 0.5f, Width - 2f, Height - 2f), 4f))
             using (SolidBrush b = new SolidBrush(Theme.Card))
@@ -281,16 +305,84 @@ namespace RushUi
             {
                 using (SolidBrush mark = new SolidBrush(Theme.Accent))
                 {
-                    g.FillRectangle(mark, 18f, 16f, 3f, 15f);
+                    g.FillRectangle(mark, 18f, 16f, 3f, 12f);
                 }
-                TextRenderer.DrawText(g, Title, titleFont, new Point(28, 14), Theme.Text,
-                                      TextFormatFlags.NoPadding | TextFormatFlags.Left);
+                Spaced(g, Title.ToUpperInvariant(), titleFont, Theme.Text, 28, 15, 1);
+                if (!Foldable || open)
+                {
+                    using (Pen rule = new Pen(Theme.Line, 1f))
+                    {
+                        g.DrawLine(rule, 18f, 40f, Width - 18f, 40f);
+                    }
+                }
+                if (Foldable)
+                {
+                    Color tone = headHover ? Theme.Text : Theme.Dim;
+                    float cx = Width - 28f;
+                    float cy = 22f;
+                    using (Pen chevron = new Pen(tone, 1.6f))
+                    {
+                        if (open)
+                        {
+                            g.DrawLines(chevron, new PointF[] { new PointF(cx - 5f, cy - 2f), new PointF(cx, cy + 3f), new PointF(cx + 5f, cy - 2f) });
+                        }
+                        else
+                        {
+                            g.DrawLines(chevron, new PointF[] { new PointF(cx - 2f, cy - 5f), new PointF(cx + 3f, cy), new PointF(cx - 2f, cy + 5f) });
+                        }
+                    }
+                    if (!open && !string.IsNullOrEmpty(summary))
+                    {
+                        TextRenderer.DrawText(g, summary, summaryFont, new Rectangle(190, 0, Math.Max(1, Width - 190 - 46), 44),
+                                              headHover ? Theme.Text : Theme.Dim,
+                                              TextFormatFlags.Right | TextFormatFlags.VerticalCenter |
+                                              TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+                    }
+                }
+            }
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            bool over = Foldable && e.Y < 44;
+            if (over != headHover)
+            {
+                headHover = over;
+                Cursor = over ? Cursors.Hand : Cursors.Default;
+                Invalidate();
+            }
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (headHover)
+            {
+                headHover = false;
+                Cursor = Cursors.Default;
+                Invalidate();
+            }
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (Foldable && e.Button == MouseButtons.Left && e.Y < 44)
+            {
+                open = !open;
+                Invalidate();
+                if (Toggled != null) { Toggled(this, EventArgs.Empty); }
             }
         }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { titleFont.Dispose(); }
+            if (disposing)
+            {
+                titleFont.Dispose();
+                summaryFont.Dispose();
+            }
             base.Dispose(disposing);
         }
     }
@@ -919,7 +1011,7 @@ namespace RushUi
             Spaced(g, "RUSHVR", wordFont, Color.FromArgb(22, 3, 5), 26, 10, 2);
             int x = Spaced(g, "RUSH", wordFont, Theme.Text, 24, 8, 2);
             x = Spaced(g, "VR", wordFont, Theme.Accent, x, 8, 2);
-            Spaced(g, "UNTIL DAWN: RUSH OF BLOOD   ·   PC VR", smallFont, Theme.Dim, 27, 56, 2);
+            Spaced(g, "UNTIL DAWN: RUSH OF BLOOD   \u00B7   PC VR", smallFont, Theme.Dim, 27, 56, 2);
 
             int bx = x + 12;
             if (!string.IsNullOrEmpty(Badge))
@@ -1004,7 +1096,7 @@ namespace RushUi
             {
                 g.FillEllipse(dot, 20f, Height / 2f - 4f, 8f, 8f);
             }
-            string text = string.Join("   ·   ", items);
+            string text = string.Join("   \u00B7   ", items);
             TextRenderer.DrawText(g, text, statusFont, new Rectangle(38, 0, Math.Max(1, Width - 52), Height), Theme.Dim,
                                   TextFormatFlags.VerticalCenter | TextFormatFlags.Left |
                                   TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
@@ -1120,6 +1212,17 @@ function Show-Box([string]$text, [string]$buttons = "OK", [string]$icon = "Infor
         return [System.Windows.Forms.MessageBox]::Show($owner, $text, "RushVR", $buttons,
                                                        $icon, $default).ToString()
     } finally { $owner.Dispose() }
+}
+
+# True when a PlayStation controller (DualSense, DualShock 4) is connected to this PC. The game
+# prefers it over the Quest controllers, so with one plugged in the Quest controllers do nothing.
+function Test-PlayStationPad {
+    try {
+        $found = @(Get-PnpDevice -PresentOnly -ErrorAction Stop | Where-Object {
+            $_.Status -eq "OK" -and $_.InstanceId -like 'HID\*' -and
+            $_.InstanceId -match 'VID_054C&PID_(0CE6|0DF2|05C4|09CC)|VID&0002054C_PID&(0CE6|0DF2|05C4|09CC)' })
+        return ($found.Count -gt 0)
+    } catch { return $false }
 }
 
 # Shows one of the launcher's windows and waits for it. In its normal size and in front, also
@@ -1625,13 +1728,46 @@ function Show-MenuModern {
         $cText = [RushUi.Theme]::Text
         $cDim = [RushUi.Theme]::Dim
         $cAccent = [RushUi.Theme]::Accent
-        # The controllers card sits above the bottom row.
-        $dy = 190
+
+        # The presets of the picture quality (Low, Medium, High): the width of an eye, the textures,
+        # the edge smoothing, the sharpening, and the size of the picture handed to the headset.
+        $presetNames = @("Low", "Medium", "High")
+        $presetWidth = @(1536, 2304, 2880)
+        $presetAniso = @("4", "16", "16")
+        $presetFxaa = @("0", "0.65", "0.65")
+        $presetSharp = @("0", "0.3", "0.3")
+        $presetLayer = @("75", "50", "50")
+        $presetButtons = @()
+        # Lights the button of the preset the choices are at (none, when they are at none of them).
+        $markPresets = {
+            if ($presetButtons.Count -eq 0) { return }
+            for ($n = 0; $n -lt 3; $n++) {
+                $same = ($widths[$resolution.Value] -eq $presetWidth[$n]) -and
+                        ($anisoKeys[$anisoBox.SelectedIndex] -eq $presetAniso[$n]) -and
+                        ($fxaaKeys[$fxaaBox.SelectedIndex] -eq $presetFxaa[$n]) -and
+                        ($sharpKeys[$sharpBox.SelectedIndex] -eq $presetSharp[$n]) -and
+                        ($layerKeys[$layerBox.SelectedIndex] -eq $presetLayer[$n])
+                if ($presetButtons[$n].Primary -ne $same) {
+                    $presetButtons[$n].Primary = $same
+                    $presetButtons[$n].Invalidate()
+                }
+            }
+        }
+        $applyPreset = {
+            param($n)
+            $resolution.Value = [array]::IndexOf($widths, $presetWidth[$n])
+            $anisoBox.SelectedIndex = [array]::IndexOf($anisoKeys, $presetAniso[$n])
+            $fxaaBox.SelectedIndex = [array]::IndexOf($fxaaKeys, $presetFxaa[$n])
+            $sharpBox.SelectedIndex = [array]::IndexOf($sharpKeys, $presetSharp[$n])
+            $layerBox.SelectedIndex = [array]::IndexOf($layerKeys, $presetLayer[$n])
+            & $markPresets
+        }
 
         # The window draws its own title bar (the banner), so it can be minimized from there.
+        # Its height is set by $layout below, which also moves things when a card is folded.
         $form = New-Object RushUi.Window
         $form.Text = "RushVR"
-        $form.ClientSize = New-Object System.Drawing.Size(736, (618 + $dy + 34))
+        $form.ClientSize = New-Object System.Drawing.Size(736, 700)
         $form.StartPosition = "CenterScreen"
         $form.TopMost = $true
         $form.BackColor = [RushUi.Theme]::Back
@@ -1661,67 +1797,93 @@ function Show-MenuModern {
         $tips.SetToolTip($minimizeButton, "Minimize")
         $tips.SetToolTip($closeButton, "Close")
 
-        # Headset.
-        $headset = New-Card "Headset" 24 92 332 170
+        # Row 1: the headset connection, and the frame rate. (y 92, 150 high)
+        $headset = New-Card "Headset" 24 92 332 150
         $form.Controls.Add($headset)
-        [void](New-Label $headset "Connection (OpenXR runtime)" 18 46 296 20 $cDim 9)
+        [void](New-Label $headset "Connection (OpenXR runtime)" 18 50 296 20 $cDim 9)
         $runtimeNames = @("Automatic (as the PC has it set up)", "Virtual Desktop", "SteamVR")
         $runtimeKeys = @("pc", "virtualdesktop", "steamvr")
         $index = [array]::IndexOf($runtimeKeys, (Setting "runtime" "pc"))
         if ($index -lt 0) { $index = 0 }
-        $runtimeBox = New-Dropdown $headset $runtimeNames $index 18 68 296
-        $runtimeText = New-Label $headset "" 18 110 296 52 $cDim 8.5
+        $runtimeBox = New-Dropdown $headset $runtimeNames $index 18 72 296
+        $runtimeText = New-Label $headset "" 18 112 296 32 $cDim 8.5
         $updateRuntime = {
             $runtimeText.Text = switch ($runtimeBox.SelectedIndex) {
-                1 { "Through Virtual Desktop's streamer, which is started if it is not running. In the headset, connect Virtual Desktop to this PC." }
-                2 { "Through SteamVR, which is started if it is not running: the headset has to be connected to it first. Not tested with this game yet." }
-                default { "Whichever runtime the PC has set as its OpenXR runtime (Virtual Desktop's streamer sets itself when it starts)." }
+                1 { "Starts Virtual Desktop's streamer if needed. In the headset, connect it to this PC." }
+                2 { "Starts SteamVR if needed: connect the headset to it first. Not tested with this game yet." }
+                default { "Uses the runtime the PC has set (Virtual Desktop's streamer sets itself when it starts)." }
             }
         }
         $runtimeBox.Add_SelectedIndexChanged($updateRuntime)
         & $updateRuntime
 
-        # Picture.
-        $picture = New-Card "Picture" 380 92 332 252
+        $rate = New-Card "Frame rate" 380 92 332 150
+        $form.Controls.Add($rate)
+        $targetKeys = @("0", "30", "35", "40", "45", "50", "60")
+        $targetNames = @("Original timing (the game's own pace)", "30 a second", "35 a second", "40 a second (steady at 80 Hz)", "45 a second (steady at 90 Hz)", "50 a second", "60 a second (recommended, 120 Hz)")
+        [void](New-Label $rate "Aim for" 18 50 296 20 $cDim 9)
+        $targetBox = New-Dropdown $rate $targetNames (Find-Nearest ([double[]]$targetKeys) (Read-Number "target_fps" 60)) 18 72 296
+        [void](New-Label $rate "60 suits Virtual Desktop at 120 Hz (45 at 90 Hz, 40 at 80 Hz). Lower is steadier on a slower PC." 18 112 296 32 $cDim 8.5)
+        $tips.SetToolTip($targetBox, "The emulator holds the game to this rate. 60 is the game's own and looks smoothest with Virtual Desktop's frame rate at 120 (Streaming tab); at 90 or 80 use 45 or 40. Lower is steadier on a slower PC.")
+
+        # Row 2: the picture, the two sliders side by side. (y 254, 148 high)
+        $picture = New-Card "Picture" 24 254 688 148
         $form.Controls.Add($picture)
-        [void](New-Label $picture "Resolution of each eye" 18 46 170 20 $cDim 9)
-        $resolutionValue = New-Label $picture "" 188 46 126 20 $cAccent 9.5 "Segoe UI Semibold" "TopRight"
+        [void](New-Label $picture "Quality" 290 11 120 20 $cDim 8.5 "Segoe UI" "TopRight")
+        $presetTips = @(
+            "The lightest of the three, for a PC that struggles: 1536 an eye, 4x textures, no edge smoothing or sharpening, and the picture to the headset at 75%. For a lighter one still, lower the resolution slider by hand (1152 is the console's own).",
+            "The default: 2304 an eye, 16x textures, normal edge smoothing and sharpening, and the picture to the headset at 50%, which Virtual Desktop then shows smoothly. It wants a good graphics card.",
+            "The sharpest and least pixelated: 2880 an eye, the largest. It needs a strong graphics card and a big Windows page file (see the README)."
+        )
+        for ($n = 0; $n -lt 3; $n++) {
+            $presetButton = New-Object RushUi.FlatButton
+            $presetButton.Text = $presetNames[$n]
+            $presetButton.SetBounds((426 + $n * 84), 7, 76, 26)
+            $picture.Controls.Add($presetButton)
+            $tips.SetToolTip($presetButton, $presetTips[$n])
+            $presetButtons += $presetButton
+        }
+        $presetButtons[0].Add_Click({ & $applyPreset 0 })
+        $presetButtons[1].Add_Click({ & $applyPreset 1 })
+        $presetButtons[2].Add_Click({ & $applyPreset 2 })
+        [void](New-Label $picture "Resolution of each eye" 18 50 200 20 $cDim 9)
+        $resolutionValue = New-Label $picture "" 218 50 120 20 $cAccent 9.5 "Segoe UI Semibold" "TopRight"
         $current = 0
         [void][int]::TryParse((Setting "eye_width" "$defaultWidth"), [ref]$current)
         $index = [array]::IndexOf($widths, $current)
         if ($index -lt 0) { $index = [array]::IndexOf($widths, $defaultWidth) }
-        $resolution = New-Slider $picture 0 ($widths.Count - 1) $index 18 66 296
-        $resolutionText = New-Label $picture "" 18 100 296 48 $cDim 8.5
+        $resolution = New-Slider $picture 0 ($widths.Count - 1) $index 18 72 320
+        $resolutionText = New-Label $picture "" 18 108 320 32 $cDim 8.5
         $update = {
             $w = $widths[$resolution.Value]
             $h = EyeHeight $w
             $times = ($w * $h) / (1152.0 * 1296.0)
-            $what = if ($w -eq 1152) { "The console's own: the sharpness of the PlayStation 4." } elseif ($w -gt 2048) { "{0:N1} times the pixels of the console's: very demanding, it needs a lot of graphics memory and about {1:N1} GB more memory. Start lower if the game stutters." -f $times, (($times - 1) * 0.64) } else { "{0:N2} times the pixels of the console's: more work for the graphics card, and more memory. Start lower if the game stutters." -f $times }
+            $what = if ($w -eq 1152) { "The console's own sharpness." } elseif ($w -gt 2048) { "{0:N1}x the console's pixels. Very demanding: about {1:N1} GB more memory." -f $times, (($times - 1) * 0.64) } else { "{0:N1}x the console's pixels. Start lower if the game stutters." -f $times }
             $resolutionValue.Text = "$w x $h"
             $resolutionText.Text = $what
         }
         $resolution.Add_ValueChanged($update)
         & $update
 
-        [void](New-Label $picture "Field of view" 18 158 170 20 $cDim 9)
-        $fovValue = New-Label $picture "" 188 158 126 20 $cAccent 9.5 "Segoe UI Semibold" "TopRight"
+        [void](New-Label $picture "Field of view" 350 50 200 20 $cDim 9)
+        $fovValue = New-Label $picture "" 550 50 120 20 $cAccent 9.5 "Segoe UI Semibold" "TopRight"
         $fovStart = [math]::Max(14, [math]::Min(32, [int]([int](Setting "fov" "105") / 5)))
-        $fov = New-Slider $picture 14 32 $fovStart 18 178 296
-        $fovText = New-Label $picture "" 18 212 296 34 $cDim 8.5
+        $fov = New-Slider $picture 14 32 $fovStart 350 72 320
+        $fovText = New-Label $picture "" 350 108 320 32 $cDim 8.5
         $ofPsvr = (Setting "fov_of" "psvr") -eq "psvr"
         $updateFov = {
             $percent = $fov.Value * 5
             $fovValue.Text = "$percent%"
             if ($percent -eq 100) {
-                $fovText.Text = $(if ($ofPsvr) { "PlayStation VR's own view: the sharpest picture, with a dark border." } else { "All that the headset shows." })
+                $fovText.Text = $(if ($ofPsvr) { "The game's own view: the sharpest, with a dark border." } else { "All that the headset shows." })
             } elseif ($percent -eq 105 -and $ofPsvr) {
-                $fovText.Text = "A little wider than PlayStation VR's own view: sharp, with hardly a border."
+                $fovText.Text = "A little wider than the game's own: sharp, hardly any border."
             } elseif ($percent -eq 120 -and $ofPsvr) {
-                $fovText.Text = "The smoothest picture, no borders (the corners are black)."
+                $fovText.Text = "The smoothest picture, no border (the corners are black)."
             } elseif ($percent -eq 155 -and $ofPsvr) {
-                $fovText.Text = "The Quest 3's own: no lens corners in view."
+                $fovText.Text = "The Quest 3's own view: no lens corners showing."
             } elseif ($percent -gt 100) {
-                $fovText.Text = "The game draws a wider view: softer picture, no border."
+                $fovText.Text = "Wider than the game's: a softer picture, no border."
             } else {
                 $fovText.Text = "Sharper, with a dark border."
             }
@@ -1729,51 +1891,120 @@ function Show-MenuModern {
         $fov.Add_ValueChanged($updateFov)
         & $updateFov
 
-        # Picture quality.
-        $quality = New-Card "Picture quality" 24 278 332 314
+        # Row 3: picture quality, folded away until it is wanted: four choices in two columns.
+        $quality = New-Card "Picture quality" 24 414 688 54
         $form.Controls.Add($quality)
         $anisoKeys = @("0", "2", "4", "8", "16")
         $anisoNames = @("Off (as the game draws)", "2x", "4x", "8x", "16x (recommended)")
-        [void](New-Label $quality "Sharper textures (anisotropic)" 18 46 296 20 $cDim 9)
-        $anisoBox = New-Dropdown $quality $anisoNames (Find-Nearest ([double[]]$anisoKeys) (Read-Number "aniso" 16)) 18 66 296
+        [void](New-Label $quality "Sharper textures (anisotropic)" 18 54 320 20 $cDim 9)
+        $anisoBox = New-Dropdown $quality $anisoNames (Find-Nearest ([double[]]$anisoKeys) (Read-Number "aniso" 16)) 18 76 320
         $tips.SetToolTip($anisoBox, "Keeps floors and walls seen at a slant sharp instead of blurred. Costs a little of the graphics card's time.")
 
         $fxaaKeys = @("0", "0.35", "0.65", "1")
         $fxaaNames = @("Off", "Light", "Normal (recommended)", "Strong")
-        [void](New-Label $quality "Smooth edges (FXAA)" 18 112 296 20 $cDim 9)
-        $fxaaBox = New-Dropdown $quality $fxaaNames (Find-Nearest ([double[]]$fxaaKeys) (Read-Number "fxaa" 0.65)) 18 132 296
+        [void](New-Label $quality "Smooth edges (FXAA)" 350 54 320 20 $cDim 9)
+        $fxaaBox = New-Dropdown $quality $fxaaNames (Find-Nearest ([double[]]$fxaaKeys) (Read-Number "fxaa" 0.65)) 350 76 320
         $tips.SetToolTip($fxaaBox, "Smooths the jagged edges of the picture on its way to the headset. A larger resolution of each eye does it best.")
 
         $maskKeys = @("0", "0.82", "0.86", "0.9", "0.94", "0.97", "1", "1.05")
         $maskNames = @("Off: the coloured corners show", "Tightest (0.82)", "Very tight (0.86)", "Tighter still (0.9, recommended)", "Tighter (0.94)", "Tight (0.97)", "On (1.0): black corners", "Loose (1.05)")
-        [void](New-Label $quality "Black corners (mask)" 18 178 296 20 $cDim 9)
-        $maskBox = New-Dropdown $quality $maskNames (Find-Nearest ([double[]]$maskKeys) (Read-Number "mask" 0.9)) 18 198 296
+        [void](New-Label $quality "Black corners (mask)" 18 124 320 20 $cDim 9)
+        $maskBox = New-Dropdown $quality $maskNames (Find-Nearest ([double[]]$maskKeys) (Read-Number "mask" 0.9)) 18 146 320
         $tips.SetToolTip($maskBox, "Black instead of the coloured corners outside the lens circles. Tighter or Tight if some colour is left at the edge (the lower, the more is black; a narrow field of view needs a lower one); Loose if the picture's edge is cut off.")
 
         $sharpKeys = @("0", "0.15", "0.3", "0.5", "0.7", "1")
         $sharpNames = @("Off", "Light (0.15)", "Normal (0.3, recommended)", "Strong (0.5)", "Very strong (0.7)", "Maximum (1.0)")
-        [void](New-Label $quality "Sharpening" 18 244 296 20 $cDim 9)
-        $sharpBox = New-Dropdown $quality $sharpNames (Find-Nearest ([double[]]$sharpKeys) (Read-Number "sharpen" 0.3)) 18 264 296
+        [void](New-Label $quality "Sharpening" 350 124 320 20 $cDim 9)
+        $sharpBox = New-Dropdown $quality $sharpNames (Find-Nearest ([double[]]$sharpKeys) (Read-Number "sharpen" 0.3)) 350 146 320
         $tips.SetToolTip($sharpBox, "Sharpens the picture on its way to the headset. Virtual Desktop has its own sharpening (Streaming tab) that adds to this one: if the picture looks crunchy or blocky, lower either of them. With Virtual Desktop's at 50% or more, try Off or Light here.")
 
-        # Frame rate.
-        $rate = New-Card "Frame rate" 380 360 332 232
-        $form.Controls.Add($rate)
-        $targetKeys = @("0", "30", "35", "40", "45", "50", "60")
-        $targetNames = @("Original timing (the game's own pace)", "30 a second", "35 a second", "40 a second (steady at 80 Hz)", "45 a second (steady at 90 Hz)", "50 a second", "60 a second (recommended, 120 Hz)")
-        $targetBox = New-Dropdown $rate $targetNames (Find-Nearest ([double[]]$targetKeys) (Read-Number "target_fps" 60)) 18 46 296
-        [void](New-Label $rate "The emulator holds the game to this rate. 60 is the game's own and looks smoothest with Virtual Desktop's frame rate at 120 (Streaming tab); at 90 or 80 use 45 or 40. Lower is steadier on a slower PC." 18 90 296 66 $cDim 8.5)
+        # The size of the picture handed to the headset's runtime (SHADPS4_VR_LAYER_SCALE).
+        $layerKeys = @("100", "75", "50")
+        $layerNames = @("Full size (100%)", "Three quarters (75%)", "Half (50%)")
+        $startLayer = Read-Number "layer_scale" 0
+        if ($startLayer -le 0) {
+            # Not set: 50 for a large picture, 100 for the others. (Older settings had it as an
+            # env line, which is used if there is one.)
+            $startLayer = $(if ($widths[$resolution.Value] -ge 2048) { 50 } else { 100 })
+            foreach ($pair in $extraEnv) {
+                $scaleNow = 0.0
+                if ($pair -like "SHADPS4_VR_LAYER_SCALE=*" -and [double]::TryParse($pair.Substring(23), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$scaleNow)) {
+                    $startLayer = $scaleNow * 100
+                }
+            }
+        }
+        [void](New-Label $quality "Picture size sent to the headset" 18 194 320 20 $cDim 9)
+        $layerBox = New-Dropdown $quality $layerNames (Find-Nearest ([double[]]$layerKeys) $startLayer) 18 216 320
+        [void](New-Label $quality "Smaller is lighter for the PC and the stream, and a little softer. A big picture looks smoother shrunk here than by Virtual Desktop." 350 212 320 44 $cDim 8.5)
+        $tips.SetToolTip($layerBox, "The picture the game draws is shrunk to this part of its size before it goes to Virtual Desktop (or SteamVR), which would otherwise shrink it itself with a rougher filter. Smaller means less for the PC to send and the headset to receive; a large picture (2048 an eye and more) looks smoother shrunk here.")
 
-        # Controllers: the DualSense, or the Quest controllers playing as Move wands (Motion edition).
-        $moveCard = New-Card "Controllers" 24 606 688 108
+        # What the folded card says: the four choices in a line.
+        $anisoShort = @("off", "2x", "4x", "8x", "16x")
+        $fxaaShort = @("off", "light", "normal", "strong")
+        $sharpShort = @("off", "light", "normal", "strong", "very strong", "maximum")
+        $updateQuality = {
+            $quality.Summary = ("Textures " + $anisoShort[$anisoBox.SelectedIndex] + "  |  Edges " + $fxaaShort[$fxaaBox.SelectedIndex] + "  |  Sharpening " + $sharpShort[$sharpBox.SelectedIndex] + "  |  Size " + $layerKeys[$layerBox.SelectedIndex] + "%")
+        }
+        foreach ($box in @($anisoBox, $fxaaBox, $maskBox, $sharpBox, $layerBox)) { $box.Add_SelectedIndexChanged($updateQuality) }
+        & $updateQuality
+        foreach ($box in @($anisoBox, $fxaaBox, $sharpBox, $layerBox)) { $box.Add_SelectedIndexChanged($markPresets) }
+        $resolution.Add_ValueChanged($markPresets)
+        & $markPresets
+        $quality.Foldable = $true
+        $quality.Open = $false
+        foreach ($c in $quality.Controls) { $c.Visible = $false }
+        $tips.SetToolTip($quality, "Click to show or hide the picture quality choices.")
+
+        # Row 4: what the window on the PC shows (a screen recording sees it), folded away too.
+        $windowCard = New-Card "PC window" 24 480 688 54
+        $form.Controls.Add($windowCard)
+        $viewKeys = @("left", "right", "merged", "both")
+        $viewNames = @("Left eye, cropped (a regular view)", "Right eye, cropped (a regular view)", "Both eyes, one regular view (blended)", "Both eyes, with the lens circles")
+        $viewShort = @("left eye", "right eye", "both eyes, one view", "both eyes, circles")
+        [void](New-Label $windowCard "The window on the PC shows" 18 54 320 20 $cDim 9)
+        $viewIndex = [array]::IndexOf($viewKeys, (Setting "pc_view" "left"))
+        if ($viewIndex -lt 0) { $viewIndex = 0 }
+        $viewBox = New-Dropdown $windowCard $viewNames $viewIndex 18 76 320
+        $tips.SetToolTip($viewBox, "What the window of the game on the PC shows, which is what a screen recording of it sees. The headset is not affected. A cropped eye fills the window like a normal game. Both eyes, one view, joins the left eye's picture into the right eye's across the middle: things very close up can look doubled there.")
+        $viewText = New-Label $windowCard "" 18 116 320 32 $cDim 8.5
+        [void](New-Label $windowCard "Zoom" 350 54 200 20 $cDim 9)
+        $zoomValue = New-Label $windowCard "" 550 54 120 20 $cAccent 9.5 "Segoe UI Semibold" "TopRight"
+        $zoomStart = [math]::Max(10, [math]::Min(24, [int][math]::Round((Read-Number "pc_zoom" 100) / 5)))
+        $zoom = New-Slider $windowCard 10 24 $zoomStart 350 76 320
+        $tips.SetToolTip($zoom, "How much of the picture the cropped views show. 100% is the most that fits the window without black corners; lower is closer in, higher shows more of the picture and brings black corners. Not used for the view with the lens circles.")
+        $zoomText = New-Label $windowCard "100% fits the window with no black corners." 350 116 320 32 $cDim 8.5
+        $updateView = {
+            $viewText.Text = switch ($viewBox.SelectedIndex) {
+                0 { "The left eye's picture, cropped to fill the window like a normal game." }
+                1 { "The right eye's picture, cropped to fill the window." }
+                2 { "Both eyes joined into one flat view. Things very close up can look doubled near the middle." }
+                default { "Both eyes side by side, with the lens circles, as the headset gets them." }
+            }
+            $zoomNow = ($viewBox.SelectedIndex -ne 3)
+            $zoom.Enabled = $zoomNow
+            $zoomValue.ForeColor = $(if ($zoomNow) { $cAccent } else { $cDim })
+            $zoomValue.Text = $(if ($zoomNow) { "" + ($zoom.Value * 5) + "%" } else { "" })
+            $windowCard.Summary = ($viewShort[$viewBox.SelectedIndex] + $(if ($zoomNow) { "  |  zoom " + ($zoom.Value * 5) + "%" } else { "" }))
+        }
+        $viewBox.Add_SelectedIndexChanged($updateView)
+        $zoom.Add_ValueChanged($updateView)
+        & $updateView
+        $windowCard.Foldable = $true
+        $windowCard.Open = $false
+        foreach ($c in $windowCard.Controls) { $c.Visible = $false }
+        $tips.SetToolTip($windowCard, "Click to show or hide what the window on the PC shows.")
+
+        # Row 5: controllers, the DualSense or the Quest controllers playing as Move wands (Motion edition).
+        $moveHeight = $(if ($motionEdition) { 108 } else { 46 })
+        $moveCard = New-Card "Controllers" 24 480 688 $moveHeight
         $form.Controls.Add($moveCard)
         $moveOn = New-Object RushUi.Toggle
         $moveOn.Text = $(if ($motionEdition) { "Quest controllers as Move wands" } else { "Quest controllers as Move wands (Motion edition)" })
-        $moveOn.SetBounds(124, 6, 420, 26)
+        $moveOn.SetBounds(150, 8, 390, 26)
         $moveOn.Checked = ($motionEdition -and ((Setting "controllers" "dualsense") -eq "quest"))
         $moveOn.Enabled = $motionEdition
         $moveCard.Controls.Add($moveOn)
-        $tips.SetToolTip($moveOn, "Plays with the Quest controllers, as the game's two PlayStation Move wands, instead of the DualSense. In the game's start-up question choose the Move controllers. Motion edition only.")
+        $tips.SetToolTip($moveOn, "Plays with the Quest controllers, as the game's two PlayStation Move wands, instead of the DualSense. In the game's start-up question choose the Move controllers. Unplug the DualSense first: the game uses it instead when it is connected. Motion edition only.")
         $moveDefaults = @(35, 55, 65)
         $moveKeys = @("move_pitch", "move_reach", "move_turn")
         $moveTitles = @("Aim angle", "Reach", "Turning")
@@ -1790,9 +2021,9 @@ function Show-MenuModern {
             $x = 18 + $i * 224
             $start = [int][math]::Round((Read-Number $moveKeys[$i] $moveDefaults[$i]))
             $start = [math]::Max($moveLimits[$i][0], [math]::Min($moveLimits[$i][1], $start))
-            [void](New-Label $moveCard $moveTitles[$i] $x 46 100 20 $cDim 9)
-            $moveValues += (New-Label $moveCard "" ($x + 100) 46 100 20 $cAccent 9.5 "Segoe UI Semibold" "TopRight")
-            $slider = New-Slider $moveCard $moveLimits[$i][0] $moveLimits[$i][1] $start $x 66 200
+            [void](New-Label $moveCard $moveTitles[$i] $x 50 100 20 $cDim 9)
+            $moveValues += (New-Label $moveCard "" ($x + 100) 50 100 20 $cAccent 9.5 "Segoe UI Semibold" "TopRight")
+            $slider = New-Slider $moveCard $moveLimits[$i][0] $moveLimits[$i][1] $start $x 70 200
             $tips.SetToolTip($slider, $moveTips[$i])
             $moveSliders += $slider
         }
@@ -1805,7 +2036,7 @@ function Show-MenuModern {
         & $moveUpdate
         $moveReset = New-Object RushUi.FlatButton
         $moveReset.Text = "Recommended"
-        $moveReset.SetBounds(556, 6, 116, 28)
+        $moveReset.SetBounds(554, 8, 116, 28)
         $moveReset.Add_Click({
             for ($j = 0; $j -lt 3; $j++) { $moveSliders[$j].Value = $moveDefaults[$j] }
         })
@@ -1820,10 +2051,14 @@ function Show-MenuModern {
         }
         $moveOn.Add_CheckedChanged($moveEnable)
         & $moveEnable
+        # Without the Motion edition the card is only its title row and the switch.
+        if (-not $motionEdition) {
+            foreach ($c in $moveCard.Controls) { if ($c -ne $moveOn) { $c.Visible = $false } }
+        }
 
         # The strip along the bottom: what the game will start with.
         $status = New-Object RushUi.StatusBar
-        $status.SetBounds(1, ($form.ClientSize.Height - 33), 734, 32)
+        $status.SetBounds(1, 666, 734, 32)
         $form.Controls.Add($status)
         $runtimeShort = @("Automatic", "Virtual Desktop", "SteamVR")
         $updateStatus = {
@@ -1848,28 +2083,64 @@ function Show-MenuModern {
         $neo = New-Object RushUi.Toggle
         $neo.Text = "PS4 Pro mode (sharper textures)"
         $neo.Checked = Get-NeoMode
-        $neo.SetBounds(24, (540 + $dy), 380, 26)
+        $neo.SetBounds(24, 600, 380, 26)
         $form.Controls.Add($neo)
         $tips.SetToolTip($neo, "The game is told it runs on a PlayStation 4 Pro, which gives sharper textures. Takes effect as the game starts.")
         $again = New-Object RushUi.Toggle
         $again.Text = "Show this window at every start"
         $again.Checked = (Setting "menu" "1") -ne "0"
-        $again.SetBounds(24, (570 + $dy), 380, 26)
+        $again.SetBounds(24, 630, 380, 26)
         $form.Controls.Add($again)
 
         $play = New-Object RushUi.FlatButton
         $play.Text = "Play"
         $play.Primary = $true
-        $play.SetBounds(592, (548 + $dy), 120, 40)
+        $play.SetBounds(592, 608, 120, 40)
         $play.DialogResult = [System.Windows.Forms.DialogResult]::OK
         $form.Controls.Add($play)
         $form.AcceptButton = $play
         $quit = New-Object RushUi.FlatButton
         $quit.Text = "Quit"
-        $quit.SetBounds(476, (548 + $dy), 104, 40)
+        $quit.SetBounds(476, 608, 104, 40)
         $quit.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
         $form.Controls.Add($quit)
         $form.CancelButton = $quit
+
+        # Where everything below the picture goes, which depends on whether the picture quality
+        # card is open; the window grows and shrinks with it.
+        $layout = {
+            $y = 414
+            $quality.SetBounds(24, $y, 688, $(if ($quality.Open) { 260 } else { 54 }))
+            $y += $quality.Height + 12
+            $windowCard.SetBounds(24, $y, 688, $(if ($windowCard.Open) { 168 } else { 54 }))
+            $y += $windowCard.Height + 12
+            $moveCard.SetBounds(24, $y, 688, $moveHeight)
+            $y += $moveHeight + 14
+            $neo.SetBounds(24, $y, 380, 26)
+            $again.SetBounds(24, ($y + 30), 380, 26)
+            $quit.SetBounds(476, ($y + 8), 104, 40)
+            $play.SetBounds(592, ($y + 8), 120, 40)
+            $form.ClientSize = New-Object System.Drawing.Size(736, ($y + 62 + 33))
+            $status.SetBounds(1, ($form.ClientSize.Height - 33), 734, 32)
+            # Keep the whole window on the screen when it grows.
+            $area = [System.Windows.Forms.Screen]::FromControl($form).WorkingArea
+            if ($form.Bottom -gt $area.Bottom) { $form.Top = [math]::Max($area.Top, ($area.Bottom - $form.Height)) }
+            $form.Invalidate()
+        }
+        # Only one of the two folding cards is open at a time.
+        $quality.Add_Toggled({
+            if ($quality.Open) { $windowCard.Open = $false }
+            foreach ($c in $quality.Controls) { $c.Visible = $quality.Open }
+            foreach ($c in $windowCard.Controls) { $c.Visible = $windowCard.Open }
+            & $layout
+        })
+        $windowCard.Add_Toggled({
+            if ($windowCard.Open) { $quality.Open = $false }
+            foreach ($c in $windowCard.Controls) { $c.Visible = $windowCard.Open }
+            foreach ($c in $quality.Controls) { $c.Visible = $quality.Open }
+            & $layout
+        })
+        & $layout
 
     } catch {
         $script:windowError = $_.Exception.Message
@@ -1884,8 +2155,15 @@ function Show-MenuModern {
     Save-Setting "fxaa" ($fxaaKeys[$fxaaBox.SelectedIndex])
     Save-Setting "mask" ($maskKeys[$maskBox.SelectedIndex])
     Save-Setting "sharpen" ($sharpKeys[$sharpBox.SelectedIndex])
+    Save-Setting "layer_scale" ($layerKeys[$layerBox.SelectedIndex])
+    # The picture size is a setting now: an env line for it from before would override it.
+    if (@($extraEnv | Where-Object { $_ -like "SHADPS4_VR_LAYER_SCALE=*" }).Count -gt 0) {
+        Set-Content -Path $SettingsFile -Value @(Get-Content $SettingsFile | Where-Object { $_ -notmatch '^\s*env\s*=\s*SHADPS4_VR_LAYER_SCALE\s*=' }) -Encoding UTF8
+    }
     Save-Setting "target_fps" ($targetKeys[$targetBox.SelectedIndex])
     Save-Setting "fov" ($fov.Value * 5)
+    Save-Setting "pc_view" ($viewKeys[$viewBox.SelectedIndex])
+    Save-Setting "pc_zoom" ($zoom.Value * 5)
     if ($motionEdition) {
         Save-Setting "controllers" ($(if ($moveOn.Checked) { "quest" } else { "dualsense" }))
         for ($i = 0; $i -lt 3; $i++) { Save-Setting $moveKeys[$i] ("" + $moveSliders[$i].Value) }
@@ -1963,11 +2241,42 @@ $fxaa = 0.65
 if (-not [double]::TryParse((Setting "fxaa" "0.65"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$fxaa)) { $fxaa = 0.65 }
 $fxaa = [math]::Max(0.0, [math]::Min(1.0, $fxaa))
 if ($fxaa -gt 0) { $env:SHADPS4_VR_FXAA = $fxaa.ToString([System.Globalization.CultureInfo]::InvariantCulture) }
+# pc_view: what the window on the PC shows (the headset is not affected): left or right, one eye
+# cropped to fill the window; merged, both eyes joined into one picture; both, the picture with both
+# lens circles. pc_zoom, in percent: 100 fits the window with no black corners, less is closer in.
+# layer_scale: the picture handed to the headset's runtime is this percent of the size it is drawn
+# at (shrunk here, with a smoother filter than the runtime's); 100 leaves it as it is.
+# Not set: 50 for a large picture (2048 an eye and more), 100 for the others.
+$layerPercent = $(if ($width -ge 2048) { 50.0 } else { 100.0 })
+$layerParsed = 0.0
+if ([double]::TryParse((Setting "layer_scale" ""), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$layerParsed)) { $layerPercent = $layerParsed }
+if ($layerPercent -lt 100.0 -and $layerPercent -ge 25.0) {
+    $env:SHADPS4_VR_LAYER_SCALE = ($layerPercent / 100.0).ToString([System.Globalization.CultureInfo]::InvariantCulture)
+}
+$pcView = Setting "pc_view" "left"
+if (@("left", "right", "merged", "both") -contains $pcView) { $env:SHADPS4_PC_WINDOW = $pcView }
+$pcZoom = 100.0
+if ([double]::TryParse((Setting "pc_zoom" "100"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$pcZoom) -and $pcZoom -ne 100.0) {
+    $env:SHADPS4_PC_WINDOW_ZOOM = ([math]::Max(30.0, [math]::Min(200.0, $pcZoom)) / 100.0).ToString([System.Globalization.CultureInfo]::InvariantCulture)
+}
 # Motion edition: the Quest controllers play as Move wands when "controllers=quest" (the window sets
 # it); move_pitch is in degrees, move_reach and move_turn in percent. What is not set is left to the
 # emulator's own recommended values.
 Remove-Item -Path Env:SHADPS4_QUEST_MOVE -ErrorAction SilentlyContinue
 if ($motionEdition -and (Setting "controllers" "dualsense") -eq "quest") { $env:SHADPS4_QUEST_MOVE = "1" }
+if ($env:SHADPS4_QUEST_MOVE -eq "1") {
+    # With a PlayStation controller connected the game keeps using it and ignores the Quest
+    # controllers, so ask for it to be unplugged (or turned off) first.
+    while (Test-PlayStationPad) {
+        $answer = Show-Box ("A PlayStation controller (DualSense) is connected to this PC." + [Environment]::NewLine + [Environment]::NewLine +
+            "The game uses it instead of your Quest controllers, so they will not work while it is connected." + [Environment]::NewLine +
+            "Unplug the USB cable, or turn it off (hold the PS button until the light goes out)." + [Environment]::NewLine + [Environment]::NewLine +
+            "Retry: check again.   Ignore: play anyway.   Abort: quit.") "AbortRetryIgnore" "Warning"
+        if ($answer -eq "Retry") { continue }
+        if ($answer -eq "Abort") { exit 0 }
+        break
+    }
+}
 if ($env:SHADPS4_QUEST_MOVE -eq "1") {
     $moveEnv = @(@("move_pitch", "SHADPS4_QUEST_MOVE_PITCH", 1.0), @("move_reach", "SHADPS4_QUEST_MOVE_SCALE", 0.01), @("move_turn", "SHADPS4_QUEST_MOVE_TURN", 0.01))
     foreach ($entry in $moveEnv) {
@@ -2104,6 +2413,7 @@ if ($env:SHADPS4_OPENXR -ne "0" -and [int]$env:SHADPS4_XR_WAIT -gt 0) {
 }
 if ($env:SHADPS4_QUEST_MOVE -eq "1") {
     Say "Move controllers: your Quest controllers play as the game's two PlayStation Move wands."
+    Say "Unplug the DualSense (or turn it off) first: while one is connected the game uses it and the Quest controllers do nothing."
     Say "In the game's start-up question choose the Move controllers, then press the grip button"
     Say "(the MOVE button) on the controller you hold. Right hand = the first wand."
     Say "Trigger = T, grip = MOVE, A/X = cross, B/Y = circle, stick click = square,"

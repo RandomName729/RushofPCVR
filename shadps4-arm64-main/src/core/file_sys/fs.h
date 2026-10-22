@@ -81,6 +81,8 @@ public:
     }
 
 private:
+    std::filesystem::path GetHostPathRaw(std::string_view guest_directory, bool* is_read_only,
+                                         HostPathType host_path);
     std::vector<MntPair> m_mnt_pairs;
     std::vector<std::filesystem::path> path_parts;
     tsl::robin_map<std::filesystem::path, std::filesystem::path> path_cache;

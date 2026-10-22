@@ -3,6 +3,25 @@
 All notable changes to RushVR, newest first. RushVR is shadPS4 plus a VR layer and the fixes that
 let Until Dawn: Rush of Blood run under emulation.
 
+## 0.4.0, update of 2026-10-22 (same version, the zips were replaced)
+
+The new start-up window and a fix for streaks of colour in level 2.
+
+- **Long streaks of colour covering the view in level 2 are fixed.** The game's texture files have
+  long names (the cellar props, 200+ characters); unpacked in a deep folder their full path passed
+  Windows' 260 characters and the emulator could not open them (the log showed "file does not
+  exist" about 20 000 times), so those textures never loaded. The emulator now hands such paths
+  to Windows in the long form (`SHADPS4_NO_LONG_PATHS=1` turns that off). A short folder such as
+  `C:\Games\RushVR` is still the safest.
+- **Motion edition: unplug the DualSense.** While a PlayStation controller is connected to the PC
+  the game uses it and ignores the Quest controllers. The start-up window now warns when one is
+  connected (Retry after unplugging, or Ignore to play anyway), and the README says so.
+- **New start-up window**: Low, Medium and High buttons for the picture, with settings that fold
+  away (Picture quality, PC window); a "Picture size sent to the headset" choice; a "PC window"
+  card to choose what the monitor shows (left eye, right eye, both eyes merged into one normal
+  view, or the two circles) with a zoom; fewer controls and less text on screen at once.
+- **Higher defaults**: Medium is 2304 pixels an eye (High 2880, Low 1536).
+
 ## 0.4.0 - 2026-10-21
 
 Shadows that flickered are fixed, memory use at large picture sizes, and a few start-up window choices.
@@ -12,7 +31,8 @@ Shadows that flickered are fixed, memory use at large picture sizes, and a few s
   whole picture every time, so the shadows drawn earlier in the frame were wiped and which ones
   survived changed from frame to frame. Now only the tile's own area is cleared
   (`SHADPS4_FULL_DEPTH_CLEAR=1` brings the old behaviour back). The flashlight's own shadows can
-  still jump or show extra lines.- **Large `eye_width` (2688, 2880) no longer runs the PC out of memory.** The limit was the memory
+  still jump or show extra lines.
+- **Large `eye_width` (2688, 2880) no longer runs the PC out of memory.** The limit was the memory
   Windows can promise (RAM plus the page file), not the graphics card. The emulator now watches
   it and, when less than 3 GB is left, frees the pictures nothing has used for a while
   (`SHADPS4_COMMIT_GC_MB` changes the 3 GB, `SHADPS4_COMMIT_GC=0` turns it off). A bigger page

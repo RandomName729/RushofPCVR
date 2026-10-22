@@ -953,16 +953,24 @@ HmdFrames Presenter::PrepareHmdFrame(std::span<const AmdGpu::Image, 2> eye_textu
     // A title that hands over one picture for both eyes (this one's has a circle for each in
     // it) has the window show that picture once, not once for each eye.
     const bool one_picture = image_ids[0].index == image_ids[1].index;
-    // SHADPS4_PC_WINDOW=left|right|both: what the window shows of a one-picture title's picture
-    // (it holds a circle for each eye side by side): the left eye's half (the default), the right
-    // eye's, or all of it. The headset is not affected.
+    // SHADPS4_PC_WINDOW=left|right|merged|both: what the window shows of a one-picture title's
+    // picture (it holds a circle for each eye side by side): the left eye's half (the default),
+    // the right eye's, both eyes joined into one flat picture (the left eye's view fading into
+    // the right eye's across the middle), or all of it, circles and all. The headset is not
+    // affected.
     static const int window_view = [] {
         const char* value = std::getenv("SHADPS4_PC_WINDOW");
         if (value == nullptr) {
             return 1;
         }
         const std::string_view v{value};
-        return v == "both" || v == "all" ? 0 : (v == "right" ? 2 : 1);
+        if (v == "both" || v == "all") {
+            return 0;
+        }
+        if (v == "merged" || v == "blend") {
+            return 3;
+        }
+        return v == "right" ? 2 : 1;
     }();
     Frame* frame = vr_exporter->Acquire(swapchain.GetSurfaceFormat().format);
     const bool exported = frame != nullptr;
@@ -1195,6 +1203,19 @@ HmdFrames Presenter::PrepareHmdFrame(std::span<const AmdGpu::Image, 2> eye_textu
                 window_settings.crop_y = centre_y - half_h;
                 window_settings.crop_w = half_w * 2.0f;
                 window_settings.crop_h = half_h * 2.0f;
+                if (window_view == 3) {
+                    // The merged view: the left eye's crop fades into the right eye's, the same
+                    // crop around the other circle. SHADPS4_PC_WINDOW_BLEND is half the width of
+                    // the fade, as a part of the window's width (0.02 to 0.5, 0.18 unless told).
+                    static const float blend = [] {
+                        const char* value = std::getenv("SHADPS4_PC_WINDOW_BLEND");
+                        return value != nullptr
+                                   ? std::clamp(static_cast<float>(std::atof(value)), 0.02f, 0.5f)
+                                   : 0.18f;
+                    }();
+                    window_settings.stitch = blend;
+                    window_settings.stitch_shift = 0.7533f - 0.2335f;
+                }
             }
             pp_pass.Render(cmdbuf, std::span{&whole, 1}, *frame, window_settings, marker);
         } else {
@@ -1505,7 +1526,7 @@ void Presenter::DumpGpuImages() {
     }
     // (Several addresses may be given, apart by commas.)
     std::vector<VAddr> wanted_list;
-    for (const char* at = wanted_text; *at != ' ';) {
+    for (const char* at = wanted_text; *at != '\0';) {
         char* end = nullptr;
         wanted_list.push_back(std::strtoull(at, &end, 16));
         if (end == at) {

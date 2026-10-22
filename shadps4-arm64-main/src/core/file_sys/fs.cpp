@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
+#include <string>
 #include "common/string_util.h"
 #include "core/file_sys/devices/logger.h"
 #include "core/file_sys/devices/nop_device.h"
@@ -41,8 +43,8 @@ void MntPoints::UnmountAll() {
     m_mnt_pairs.clear();
 }
 
-std::filesystem::path MntPoints::GetHostPath(std::string_view path, bool* is_read_only,
-                                             HostPathType path_type) {
+std::filesystem::path MntPoints::GetHostPathRaw(std::string_view path, bool* is_read_only,
+                                                HostPathType path_type) {
     // Evil games like Turok2 pass double slashes e.g /app0//game.kpf
     std::string corrected_path(path);
     size_t pos = corrected_path.find("//");
@@ -188,6 +190,47 @@ std::filesystem::path MntPoints::GetHostPath(std::string_view path, bool* is_rea
 
     // Opening the guest path will surely fail but at least gives
     // a better error message than the empty path.
+    return host_path;
+}
+
+#ifdef _WIN32
+// Windows refuses paths of 260 characters or more unless they carry the "\\?\" prefix. The game's
+// longest texture stream file names (e.g. the cellar props) pass that limit when the game is
+// unpacked in a deep folder, so open()/exists() failed with "file does not exist" and the textures
+// never arrived (streaks of colour in level 2). Hand such paths to the OS in the long form.
+static std::filesystem::path ToLongPath(const std::filesystem::path& p) {
+    if (p.empty() || p.native().size() < 240) {
+        return p;
+    }
+    const std::wstring& native = p.native();
+    if (native.rfind(LR"(\\?\)", 0) == 0) {
+        return p;
+    }
+    std::error_code ec;
+    std::filesystem::path abs = std::filesystem::absolute(p, ec);
+    if (ec) {
+        return p;
+    }
+    abs = abs.lexically_normal();
+    abs.make_preferred();
+    std::wstring wide = abs.native();
+    if (wide.rfind(LR"(\\)", 0) == 0) {
+        wide = LR"(\\?\UNC\)" + wide.substr(2);
+    } else {
+        wide = LR"(\\?\)" + wide;
+    }
+    return std::filesystem::path(wide);
+}
+#endif
+
+std::filesystem::path MntPoints::GetHostPath(std::string_view path, bool* is_read_only,
+                                             HostPathType path_type) {
+    std::filesystem::path host_path = GetHostPathRaw(path, is_read_only, path_type);
+#ifdef _WIN32
+    if (!std::getenv("SHADPS4_NO_LONG_PATHS")) {
+        return ToLongPath(host_path);
+    }
+#endif
     return host_path;
 }
 

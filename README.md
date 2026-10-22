@@ -60,8 +60,9 @@ See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 ## Installing and playing
 
 1. **Put the program in a folder with a short path**, e.g. `C:\Games\RushVR`. Some of the game's
-   files have long names, and the emulator cannot open a file whose full path is longer than
-   Windows' 260 characters.
+   files have long names. Since the 0.4.0 update of 22 October the emulator opens them even when
+   the full path passes Windows' 260 characters (before, the game then showed long streaks of
+   colour in level 2), but a short path is still the safest.
 2. **Put your copy of the game in its `games` folder**, anywhere in it: the game's folder or its
    `.pkg` file (a package is unpacked the first time you start, which takes a minute or so). Or
    leave the game where it is: when the launcher finds none, a window asks where it is and
@@ -93,10 +94,13 @@ ignored, and each setting is explained in the file itself. The ones to know:
 | `fov` | How much of the headset's field of view the game draws, in percent. **105 is the default: a little wider than a PlayStation VR's own view, sharp with hardly a border** (100 is the PlayStation VR's own view: sharpest, with a dark border) (`mask` blacks out the coloured corners outside the game's lens-shaped circles). More draws a wider, softer view with no border (120 and up). |
 | `fov_of` | What that percent is of: `psvr` (a PlayStation VR's own view, the default) or `headset`. |
 | `runtime` | Which OpenXR runtime the game uses: `pc` (the one the PC has set up, the default), `virtualdesktop`, `steamvr`, or the full path of a runtime's `.json` file. Also in the start-up window. |
-| `eye_width` | The width in pixels each eye is drawn at, 1152 to 2880 (the default is 1152). 1152 is what the console draws; larger is sharper in the headset, and slower, and takes more memory. |
+| `eye_width` | The width in pixels each eye is drawn at, 1152 to 2880 (the default is 2304). 1152 is what the console draws; larger is sharper in the headset, and slower, and takes more memory. In the start-up window the Low, Medium and High buttons are 1536, 2304 and 2880. |
 | `target_fps` | The frame rate the game is held to, 20 to 60 (0 leaves the game's own timing). **60 is the default**, steady with Virtual Desktop at 120 Hz; use 45 at 90 Hz and 40 at 80 Hz. Also in the start-up window ("Aim for"). |
 | `aniso` | Anisotropic filtering of the game's textures: 0 (as the game draws them), 2, 4, 8 or 16 (default). Also in the start-up window. |
 | `fxaa` | Smooths the picture's edges on its way to the headset: 0 off, 0.35 light, 0.65 normal (default), 1 strong. Also in the start-up window. |
+| `pc_view` | What the game's window on the PC shows (the headset is not affected; a screen recording sees this): `left` (the default) or `right`, that eye's picture cropped to fill the window like a normal game; `merged`, both eyes joined into one flat picture (the left eye's view fades into the right eye's across the middle, so things very close up can look doubled there); `both`, the whole picture with both lens circles. Also in the start-up window ("PC window"). |
+| `pc_zoom` | How close in the cropped and merged views are, in percent: 100 (the default) is the most that fits the window without black corners. |
+| `layer_scale` | The size of the picture handed to the headset's runtime, in percent of the size the game draws it at: 100, 75 or 50 (when it is not set: 50 from an `eye_width` of 2048 up, 100 below). Shrinking it here, with a smoother filter than Virtual Desktop's, gives the PC and the stream less to carry and makes a large picture look smoother, at some cost in sharpness. In the start-up window as "Picture size sent to the headset"; the Low, Medium and High buttons set it together with `eye_width`, `aniso`, `fxaa` and `sharpen`. |
 | `msaa`, `antialias` | Multisampling limits for games that use it. Rush of Blood draws without multisampling, so they change nothing here; use `fxaa` and a larger `eye_width` instead. |
 | `sharpen` | Sharpening of the picture on its way to the headset, 0 to 1. |
 | `mask` | Blacks out the coloured corners outside the two lens circles of the game's picture (1 = the circles as drawn, 0 = off; 0.9 is the default, the choices go from 0.82 to 1.05). If the circle's edge looks cut off use a higher value (1.05); if some colour is left at the edge use a lower one. |
@@ -115,12 +119,13 @@ versions is no longer read: it is `eye_width` now.)
   shows something else (Virtual Desktop's view of the desktop, for one). Put the headset on and
   make sure Virtual Desktop is streaming; `pause=0` stops the waiting.
 - **The picture looks soft or pixelated**: the console draws each eye at only 1152 x 1296 pixels.
-  Raise `eye_width` (the slider in the start-up window; 1152 is the default, 2880 the largest), keep
+  Raise `eye_width` (the slider in the start-up window; 2304 is the default, 2880 the largest), keep
   "PS4 Pro mode" on, and in Virtual Desktop try a higher bitrate and HEVC 10-bit or AV1. A
   smaller `fov` (100 is the game's own view, 105 is the default) puts the same pixels over fewer degrees: sharper, with a
   dark border. `sharpen` can be raised a little.
-- **Four circles in the PC window**: the picture the game draws holds one circle for each eye;
-  the window now shows that picture once (two circles). A Quest shows one circle in each eye.
+- **Circles in the PC window**: the picture the game draws holds one circle for each eye. The
+  window shows one eye cropped to fill it, like a normal game, unless `pc_view` ("PC window" in the
+  start-up window) says `both` (the two circles) or `merged` (both eyes joined into one picture).
 - **Windows runs out of memory at a large `eye_width`** (2688 and 2880 especially, the log says
   something like "Insufficient system resources", or the game closes): Windows has a limit on
   memory it can promise (RAM plus the page file), and the game asks for a lot of it. Give Windows a

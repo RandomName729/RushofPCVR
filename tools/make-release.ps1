@@ -85,7 +85,8 @@ $documented = Get-Content -LiteralPath (Join-Path $root "pc-vr\settings.txt") |
 $defaults = @(
     "",
     "# What this release starts with (the window at the start changes and saves them):",
-    "eye_width=1152",
+    "eye_width=2304",
+    "layer_scale=50",
     "fps=60",
     "target_fps=60",
     "aniso=16",
@@ -115,8 +116,8 @@ through Virtual Desktop.
 
 1. Put your own copy of the game in the games folder: its folder (the one with eboot.bin in
    it) or its .pkg file, which is unpacked the first time. Or skip this: a window asks where
-   the game is. Keep this folder's path short, e.g. C:\Games\RushVR: the emulator cannot open
-   the game's files whose full path would be longer than 260 characters.
+   the game is. Keep this folder's path short, e.g. C:\Games\RushVR: the emulator now opens the
+   game's files also when the full path is longer than 260 characters, but short is safest.
 2. Virtual Desktop: install the Streamer on this PC and choose VDXR as the OpenXR runtime in
    its Options. In the headset, set Virtual Desktop's frame rate to 120 (Streaming settings): the game
    is held to 60 frames a second, which is exactly every other refresh at 120. (At 90 use
@@ -139,6 +140,11 @@ From 0.3.5: one start file; a "Controllers"
 card for the Motion edition (greyed out in this one). From 0.3.0: the game runs at the
 speed it was made for, with the captions in step with the voice, at 50 to 60 frames a second with a
 steady "Aim for" rate; the garbled textures are gone; textures are sharper; FXAA is back.
+
+The picture starts at 2304 pixels an eye (the Medium choice in the start-up window), sharper than
+the console's 1152; High is 2880. If the game stutters, or does not start with an "Insufficient
+system resources" message, press Low in the window; the largest sizes need a bigger Windows page
+file (see the README on the project's page).
 
 This is still an early version: the title screen, the intro and levels 1 to 4 play through
 (later levels are untested). The picture can still look pixelated or soft in the headset, and the

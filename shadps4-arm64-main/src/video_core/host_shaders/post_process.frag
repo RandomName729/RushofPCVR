@@ -29,6 +29,12 @@ layout (push_constant) uniform settings {
     float crop_y;
     float crop_w;
     float crop_h;
+    // Above 0, the merged view of a one-picture title in the window: the crop above is taken
+    // from the left eye's circle and fades into the same crop taken stitch_shift to the right,
+    // from the right eye's, across the middle of the output. The number is half the width of
+    // that fade, in output units (0.5: the whole width is a fade).
+    float stitch;
+    float stitch_shift;
 } pp;
 
 const float cutoff = 0.0031308, a = 1.055, b = 0.055, d = 12.92;
@@ -78,8 +84,9 @@ vec3 smoothed(vec2 at, vec3 centre) {
     return (luma_wide < luma_min || luma_wide > luma_max) ? narrow : wide;
 }
 
-void main() {
-    vec2 uv = vec2(pp.crop_x, pp.crop_y) + uv_in * vec2(pp.crop_w, pp.crop_h);
+// Everything done to the picture at a place: the edge smoothing, the sharpening and the mask.
+// The colour that goes to the display, and the picture's own alpha.
+vec4 processed(vec2 uv) {
     vec4 color_linear = texture(texSampler, uv);
     vec3 here = pp.hdr ? color_linear.rgb : gamma(color_linear.rgb);
     if (pp.fxaa > 0.0) {
@@ -110,10 +117,27 @@ void main() {
                            length((uv - centre_right) / radius));
         here *= 1.0 - smoothstep(0.98, 1.0, inside);
     }
+    return vec4(here, color_linear.a);
+}
+
+void main() {
+    vec2 uv = vec2(pp.crop_x, pp.crop_y) + uv_in * vec2(pp.crop_w, pp.crop_h);
+    vec4 result;
+    if (pp.stitch > 0.0) {
+        // Both are always worked out (this is the window's picture, which is small), so that
+        // nothing in them depends on where in the picture they are.
+        vec4 from_left = processed(uv);
+        vec4 from_right = processed(uv + vec2(pp.stitch_shift, 0.0));
+        float toward_right = smoothstep(0.5 - pp.stitch, 0.5 + pp.stitch, uv_in.x);
+        result = mix(from_left, from_right, toward_right);
+    } else {
+        result = processed(uv);
+    }
+    vec3 here = result.rgb;
     if (pp.linear_out && !pp.hdr) {
         // Back to linear light, by the curve the target encodes with.
         here = mix(pow((here + 0.055) / 1.055, vec3(2.4)), here / 12.92,
                    lessThanEqual(here, vec3(0.04045)));
     }
-    color = vec4(here, color_linear.a);
+    color = vec4(here, result.a);
 }

@@ -36,6 +36,11 @@ public:
         float crop_y = 0.0f;
         float crop_w = 1.0f;
         float crop_h = 1.0f;
+        /// 0: off. Above: the merged view of a one-picture title (post_process.frag): the crop is
+        /// taken from the left eye's circle, fades into the same crop taken stitch_shift further
+        /// right (the right eye's) across the middle, and this is half the width of the fade.
+        float stitch = 0.0f;
+        float stitch_shift = 0.0f;
     };
 
     void Create(const Instance& instance, MasterSemaphore* master_semaphore,

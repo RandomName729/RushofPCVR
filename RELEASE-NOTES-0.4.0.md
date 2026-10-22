@@ -3,6 +3,15 @@
 **Until Dawn: Rush of Blood in VR on a Windows PC, shown in a Quest 3 through Virtual Desktop.**
 Bring your own copy of the game (US release, CUSA03683, version 1.00); nothing of it is included.
 
+## Update of 22 October (same version, files replaced)
+
+- **Long streaks of colour covering the view in level 2 are fixed.** Some of the game's files have
+  names so long that, in a deep folder, Windows refused to open them. The emulator now copes (a
+  short folder such as `C:\Games\RushVR` is still safest).
+- **New start-up window**: Low / Medium / High picture buttons, folding sections, a choice of what
+  the monitor shows (left eye, right eye, both merged into one normal view, or the two circles),
+  a picture size option and higher default quality.
+
 ## What's new
 
 - **Shadows no longer flicker on and off.** (The flashlight's own shadows can still jump or show extra lines.)
