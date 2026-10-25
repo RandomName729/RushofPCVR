@@ -12,6 +12,7 @@ depth buffers, its timing and resolution).
 > **No game files are included or distributed.** You need your own copy of Until Dawn: Rush of
 > Blood, dumped from your own PlayStation 4.
 
+EVERYTHING WILL BE OUT FOR FREE AT THE v1.0 RELEASE
 ## Status
 
 **Early work in progress** (version 0.4.1), built and tested by one person on one PC and one Quest 3.
