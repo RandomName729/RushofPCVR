@@ -80,7 +80,7 @@ function Test-MotionEdition {
 }
 $motionEdition = Test-MotionEdition
 # The version shown in the window's banner (the release scripts check that it is the release's).
-$launcherVersion = "0.4.1"
+$launcherVersion = "0.4.2"
 
 # PS4 Pro mode ("neo_mode" in user\config.json): the emulator then tells the game it runs on a
 # PlayStation 4 Pro, which gives sharper textures. The emulator reads it as it starts.
@@ -1557,11 +1557,11 @@ function Show-NotFound {
     $title.SetBounds(16, 14, 568, 26)
     $form.Controls.Add($title)
     $text = New-Object System.Windows.Forms.Label
-    $text.Text = "Until Dawn: Rush of Blood was not found. RushVR does not contain the game: it plays your own copy of it.`n`nPut that copy in the games folder - either the game's folder (the one with eboot.bin in it) or its .pkg file - and choose Look again. Or leave it where it is and show where that is."
+    $text.Text = "Until Dawn: Rush of Blood was not found. RushVR does not contain the game: it plays your own copy of it.`n`nChoose Show where it is... and pick your game: the eboot.bin inside the game's folder, or its .pkg file. It can stay where it is; RushVR remembers the choice and plays it from there."
     $text.SetBounds(16, 50, 568, 96)
     $form.Controls.Add($text)
     $where = New-Object System.Windows.Forms.Label
-    $where.Text = "The games folder: " + $gamesFolder
+    $where.Text = "Or put the game (its folder or its .pkg) in RushVR's own games folder, then choose Look again:`n" + $gamesFolder
     $where.ForeColor = [System.Drawing.SystemColors]::GrayText
     $where.SetBounds(16, 150, 568, 40)
     $form.Controls.Add($where)
@@ -1595,7 +1595,7 @@ function Show-NotFound {
     $quit.SetBounds(496, 204, 88, 30)
     $quit.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($quit)
-    $form.AcceptButton = $again
+    $form.AcceptButton = $pick
     $form.CancelButton = $quit
 
     $result = Show-Form $form
@@ -2255,6 +2255,7 @@ if ($layerPercent -lt 100.0 -and $layerPercent -ge 25.0) {
 }
 $pcView = Setting "pc_view" "left"
 if (@("left", "right", "merged", "both") -contains $pcView) { $env:SHADPS4_PC_WINDOW = $pcView }
+$env:RUSHVR_VERSION = $launcherVersion   # the emulator's window is titled "<game> v<this>"
 $pcZoom = 100.0
 if ([double]::TryParse((Setting "pc_zoom" "100"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$pcZoom) -and $pcZoom -ne 100.0) {
     $env:SHADPS4_PC_WINDOW_ZOOM = ([math]::Max(30.0, [math]::Min(200.0, $pcZoom)) / 100.0).ToString([System.Globalization.CultureInfo]::InvariantCulture)

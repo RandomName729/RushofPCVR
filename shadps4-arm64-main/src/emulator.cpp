@@ -447,7 +447,13 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
     game_info.trophy_index_map = ExtractTrophies(npbind_path, trophy_dir);
 
     std::string game_title = fmt::format("{} - {} <{}>", id, title, app_version);
-    const std::string window_title = fmt::format("RushVR v{} | {}", Common::g_version, game_title);
+    // The launcher names the release in RUSHVR_VERSION: then the window is called "<game> v<release>"
+    // (Until Dawn: Rush of Blood v0.4.2). Started by hand, the emulator's own version is shown.
+    const char* const release_version = std::getenv("RUSHVR_VERSION");
+    const std::string window_title =
+        release_version != nullptr && release_version[0] != '\0'
+            ? fmt::format("{} v{}", title, release_version)
+            : fmt::format("RushVR v{} | {}", Common::g_version, game_title);
     window = std::make_unique<Frontend::WindowSDL>(EmulatorSettings.GetWindowWidth(),
                                                    EmulatorSettings.GetWindowHeight(), controllers,
                                                    window_title);

@@ -3,6 +3,26 @@
 All notable changes to RushVR, newest first. RushVR is shadPS4 plus a VR layer and the fixes that
 let Until Dawn: Rush of Blood run under emulation.
 
+## 0.4.2 - 2026-10-25
+
+RushVR is now ONE file, `RushVR.exe`, and it is the only download. (The Motion edition has the same
+version number from now on: 0.4.2.)
+
+- **One-file download.** The emulator, the start-up window, PkgTool and the default settings are
+  inside `RushVR.exe`. The first start unpacks them to `%LOCALAPPDATA%\RushVR` (set the
+  `RUSHVR_HOME` variable to use another folder); a newer exe updates the program files and never
+  overwrites `settings.txt` or the `user` folder (saves, configuration, logs). The start-up window
+  asks for the game folder or `.pkg` and remembers it. No game files are inside the exe.
+  (`tools\make-single-exe.ps1` builds it; `tools\make-launcher-exe.ps1` builds a plain starter
+  without the files inside.)
+- **Correction to 0.4.1:** the notes said the streaks of colour in level 2 (the pig room) were
+  fixed. They are not: the long-path fix only helps when the game sits in a deep folder, and the
+  streaks still appear from a short folder such as `C:\UD ROB PC`. Level 2 is now a known problem.
+- **Stutter probe (for testing).** `env=SHADPS4_HITCH_PROBE=1` in `settings.txt` writes a `HITCH`
+  line group to the log whenever 45 ms or more pass between two shown frames: where each emulator
+  thread was at that moment (as `exe+0x...` offsets for the linker map). `SHADPS4_HITCH_PROBE_MS`
+  changes the 45. Off by default.
+
 ## 0.4.1 - 2026-10-22
 
 The new start-up window and a fix for streaks of colour in level 2. (The paid Motion edition keeps

@@ -36,6 +36,9 @@ namespace Vulkan {
 // vk_thread_report.cpp
 void LogThreadCpuUsage(double seconds);
 
+// End of this file: watches for stalls between presented frames (SHADPS4_HITCH_PROBE).
+void HitchProbeNoteFrame();
+
 constexpr u64 MAX_IN_FLIGHT_SUBMISSIONS = 8;
 
 namespace {
@@ -326,6 +329,7 @@ std::chrono::nanoseconds FrameStats::ThreadTime() {
 }
 
 void FrameStats::EndFrame() {
+    HitchProbeNoteFrame();
     if (!Enabled()) {
         return;
     }
@@ -957,3 +961,214 @@ void DynamicState::Commit(const Instance& instance, const vk::CommandBuffer& cmd
 }
 
 } // namespace Vulkan
+
+// ---------------------------------------------------------------------------------------------
+// Hitch probe (SHADPS4_HITCH_PROBE=1, Windows). A small thread watches the time since the last
+// presented frame. When it passes SHADPS4_HITCH_PROBE_MS (default 45) it looks at what every named
+// thread of the emulator is doing: where each one is executing and which addresses of the program
+// its stack holds. The log lines "HITCH" give these as exe+0x<offset>: look the offsets up in the
+// linker map to see which function a thread was stuck in during a stutter. Each hitch is sampled
+// up to three times (45, 60, 75 ms into it); at most 60 hitches are written per run.
+// ---------------------------------------------------------------------------------------------
+#if defined(_WIN32) && defined(_M_X64)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <tlhelp32.h>
+#include <thread>
+
+namespace Vulkan {
+namespace {
+
+std::atomic<s64> g_probe_last_frame{0};
+std::atomic<bool> g_probe_started{false};
+
+struct ProbeSample {
+    DWORD id{};
+    std::string name;
+    u64 rip{};
+    u64 stack[12]{};
+    int stack_count{};
+};
+
+std::string ProbeThreadName(HANDLE handle) {
+    std::string result;
+    PWSTR wide = nullptr;
+    if (SUCCEEDED(GetThreadDescription(handle, &wide)) && wide != nullptr) {
+        const int size = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0, nullptr, nullptr);
+        if (size > 1) {
+            result.resize(static_cast<size_t>(size) - 1);
+            WideCharToMultiByte(CP_UTF8, 0, wide, -1, result.data(), size, nullptr, nullptr);
+        }
+        LocalFree(wide);
+    }
+    return result;
+}
+
+std::string ProbeWhere(u64 address, u64 exe_base, u64 exe_size) {
+    if (address >= exe_base && address < exe_base + exe_size) {
+        return fmt::format("exe+{:#x}", address - exe_base);
+    }
+    HMODULE module = nullptr;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(address), &module) &&
+        module != nullptr) {
+        wchar_t path[MAX_PATH]{};
+        GetModuleFileNameW(module, path, MAX_PATH);
+        std::wstring name{path};
+        const size_t slash = name.find_last_of(L"\\/");
+        if (slash != std::wstring::npos) {
+            name = name.substr(slash + 1);
+        }
+        std::string narrow;
+        for (wchar_t ch : name) {
+            narrow.push_back(ch < 128 ? static_cast<char>(ch) : '?');
+        }
+        return fmt::format("{}+{:#x}", narrow, address - reinterpret_cast<u64>(module));
+    }
+    return fmt::format("guest/other {:#x}", address);
+}
+
+void ProbeMain() {
+    SetThreadDescription(GetCurrentThread(), L"shadPS4:HitchProbe");
+    const char* limit_text = std::getenv("SHADPS4_HITCH_PROBE_MS");
+    const double threshold_ms = limit_text != nullptr && std::atof(limit_text) > 5.0
+                                    ? std::atof(limit_text)
+                                    : 45.0;
+    const u64 exe_base = reinterpret_cast<u64>(GetModuleHandleW(nullptr));
+    u64 exe_size = 0;
+    {
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(exe_base);
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(exe_base + dos->e_lfanew);
+        exe_size = nt->OptionalHeader.SizeOfImage;
+    }
+    LOG_INFO(Render_Vulkan, "hitch probe on: stalls of {:.0f} ms or more between two presented "
+                            "frames are sampled; exe base {:#x}, size {:#x}",
+             threshold_ms, exe_base, exe_size);
+
+    s64 episode_frame = 0;
+    int samples_done = 0;
+    int episodes = 0;
+    std::vector<ProbeSample> samples;
+    samples.reserve(64);
+    for (;;) {
+        Sleep(5);
+        const s64 last = g_probe_last_frame.load();
+        if (last == 0 || episodes >= 60) {
+            continue;
+        }
+        const s64 now = std::chrono::steady_clock::now().time_since_epoch().count();
+        const double stalled_ms = static_cast<double>(now - last) / 1e6;
+        if (last != episode_frame) {
+            episode_frame = last;
+            samples_done = 0;
+        }
+        if (samples_done >= 3 || stalled_ms < threshold_ms + 15.0 * samples_done) {
+            continue;
+        }
+        if (samples_done == 0) {
+            ++episodes;
+        }
+        ++samples_done;
+
+        // Look at the threads. Nothing that allocates or logs may run while one is stopped, so
+        // everything is written into preallocated storage and described after they all run again.
+        samples.clear();
+        const DWORD self = GetCurrentThreadId();
+        const DWORD pid = GetCurrentProcessId();
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snap == INVALID_HANDLE_VALUE) {
+            continue;
+        }
+        std::vector<DWORD> ids;
+        ids.reserve(256);
+        THREADENTRY32 entry{};
+        entry.dwSize = sizeof(entry);
+        if (Thread32First(snap, &entry)) {
+            do {
+                if (entry.th32OwnerProcessID == pid && entry.th32ThreadID != self) {
+                    ids.push_back(entry.th32ThreadID);
+                }
+            } while (Thread32Next(snap, &entry));
+        }
+        CloseHandle(snap);
+        for (DWORD id : ids) {
+            HANDLE handle = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
+                                           THREAD_QUERY_LIMITED_INFORMATION,
+                                       FALSE, id);
+            if (handle == nullptr) {
+                continue;
+            }
+            ProbeSample sample;
+            sample.id = id;
+            sample.name = ProbeThreadName(handle);
+            if (sample.name.empty() || sample.name.rfind("JobSched", 0) == 0) {
+                CloseHandle(handle);
+                continue;
+            }
+            alignas(16) CONTEXT context{};
+            context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+            if (SuspendThread(handle) != static_cast<DWORD>(-1)) {
+                if (GetThreadContext(handle, &context)) {
+                    sample.rip = context.Rip;
+                    u64 words[384]{};
+                    SIZE_T got = 0;
+                    ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<LPCVOID>(context.Rsp),
+                                      words, sizeof(words), &got);
+                    for (size_t i = 0; i < got / sizeof(u64) && sample.stack_count < 12; ++i) {
+                        if (words[i] >= exe_base && words[i] < exe_base + exe_size) {
+                            sample.stack[sample.stack_count++] = words[i];
+                        }
+                    }
+                }
+                ResumeThread(handle);
+            }
+            CloseHandle(handle);
+            samples.push_back(std::move(sample));
+        }
+
+        LOG_INFO(Render_Vulkan, "HITCH {:.0f} ms since the last presented frame (hitch {}, "
+                                "sample {}), {} threads:",
+                 stalled_ms, episodes, samples_done, samples.size());
+        for (const auto& sample : samples) {
+            std::string line = fmt::format("HITCH   {} [{}] at {}", sample.name, sample.id,
+                                           ProbeWhere(sample.rip, exe_base, exe_size));
+            if (sample.stack_count > 0) {
+                line += "; exe addresses on its stack:";
+                for (int i = 0; i < sample.stack_count; ++i) {
+                    line += fmt::format(" {:#x}", sample.stack[i] - exe_base);
+                }
+            }
+            LOG_INFO(Render_Vulkan, "{}", line);
+        }
+    }
+}
+
+} // namespace
+
+void HitchProbeNoteFrame() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("SHADPS4_HITCH_PROBE");
+        return value != nullptr && std::atoi(value) > 0;
+    }();
+    if (!enabled) {
+        return;
+    }
+    g_probe_last_frame.store(std::chrono::steady_clock::now().time_since_epoch().count());
+    bool expected = false;
+    if (g_probe_started.compare_exchange_strong(expected, true)) {
+        std::thread{ProbeMain}.detach();
+    }
+}
+
+} // namespace Vulkan
+#else
+namespace Vulkan {
+void HitchProbeNoteFrame() {}
+} // namespace Vulkan
+#endif
