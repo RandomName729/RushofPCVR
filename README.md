@@ -13,9 +13,10 @@ depth buffers, its timing and resolution).
 > Blood, dumped from your own PlayStation 4.
 
 EVERYTHING WILL BE OUT FOR FREE AT THE v1.0 RELEASE
+
 ## Status
 
-**Early work in progress** (version 0.4.1), built and tested by one person on one PC and one Quest 3.
+**Early work in progress** (version 0.4.2), built and tested by one person on one PC and one Quest 3.
 See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 
 - The title screen, the intro and **levels 1 to 4** play through (the tester went as far as level
@@ -39,6 +40,10 @@ See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 - Known picture problems: the effects that read the depth buffer as a colour are shaded
   differently from the console, and textures whose largest level has not loaded are shown one
   level lower (a little softer).
+- Known problems: **in level 2 (the pig room) long black streaks can cover the screen** (not fixed
+  yet); the flashlight's shadows can jump or show extra lines; the player's arms can look dark in
+  the intro; small stutters now and then (see "Slow or stuttering" below for how to help find the
+  cause).
 - Expect rough edges, and please report what you find (see "If something does not work").
 
 ## What you need
@@ -60,33 +65,40 @@ See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 
 ## Installing and playing
 
-1. **Put the program in a folder with a short path**, e.g. `C:\Games\RushVR`. Some of the game's
-   files have long names. Since 0.4.1 the emulator opens them even when
-   the full path passes Windows' 260 characters (before, the game then showed long streaks of
-   colour in level 2), but a short path is still the safest.
-2. **Put your copy of the game in its `games` folder**, anywhere in it: the game's folder or its
-   `.pkg` file (a package is unpacked the first time you start, which takes a minute or so). Or
-   leave the game where it is: when the launcher finds none, a window asks where it is and
-   remembers the answer.
+1. **Download `RushVR.exe`** from the [Releases](https://github.com/RandomName729/RushofPCVR/releases) page and put it anywhere (a
+   short folder such as `C:\Games\RushVR` is fine). It is the only file you need. The first time
+   you start it, it unpacks the emulator and its tools to `%LOCALAPPDATA%\RushVR` (set the
+   `RUSHVR_HOME` environment variable first to use another folder or drive) and opens the start-up
+   window. To update, download the newer `RushVR.exe` and start it: your settings and saves stay.
+   Windows may warn about an unknown publisher (the file is not signed): choose "More info", then
+   "Run anyway".
+2. **Show it your copy of the game.** The first time, a window asks "Where is the game?": choose
+   **Show where it is...** and pick the `eboot.bin` in the game's folder, or the `.pkg` file (a
+   package is unpacked once, which takes a minute or so, into the `games` folder of the RushVR
+   folder; it needs about 13 GB). The game can stay where it is; RushVR remembers the choice
+   (`game=` in the settings). Some of the game's files have long names. Since 0.4.1 the emulator
+   opens them even when the full path passes Windows' 260 characters, but a short path for the
+   game's folder (`C:\Games\Rush`, say) is still the safest.
 3. **Set up Virtual Desktop**: install the Streamer on the PC and, in its options, choose **VDXR**
    as the OpenXR runtime. In the headset, in Virtual Desktop's streaming settings, set the frame
    rate to **120**. (SteamVR can be used instead: choose it under "Headset connection" in the
    start-up window, with the headset connected to SteamVR first. It has been tested through
    level 4 and runs well.)
 4. **Connect the DualSense to the PC.**
-5. **Connect to the PC with Virtual Desktop**, then start **`Play Rush of Blood.bat`**
+5. **Connect to the PC with Virtual Desktop**, then start **`RushVR.exe`**
    on the desktop you see in the headset. A small window lets you choose the headset connection (Virtual Desktop
    or SteamVR), the resolution, the field of view, texture sharpness, edge smoothing, the corner
    mask, the frame rate and PS4 Pro mode (and, in the Motion edition only, the Quest controllers); Play starts the game, and the headset switches to it after a few seconds.
 6. In the game's own start-up question, choose the **DualShock** controller, not the Move
    controllers.
 
-Your saves, settings and the log are in `pc-vr\user` next to the launcher: the log is
-`pc-vr\user\log\shad_log.txt`, the saves are in `pc-vr\user\home`.
+Your settings, saves and the log are in the RushVR folder (`%LOCALAPPDATA%\RushVR`): the settings
+are `pc-vr\settings.txt`, the log is `pc-vr\user\log\shad_log.txt`, the saves are in
+`pc-vr\user\home`.
 
 ## Settings
 
-Settings are in `pc-vr\settings.txt`, one `key=value` a line (the small window at start-up changes
+Settings are in `pc-vr\settings.txt` (inside the RushVR folder), one `key=value` a line (the small window at start-up changes
 the main ones and writes them there; `menu=0` stops it from coming up). Lines starting with `#` are
 ignored, and each setting is explained in the file itself. The ones to know:
 
@@ -105,8 +117,9 @@ ignored, and each setting is explained in the file itself. The ones to know:
 | `msaa`, `antialias` | Multisampling limits for games that use it. Rush of Blood draws without multisampling, so they change nothing here; use `fxaa` and a larger `eye_width` instead. |
 | `sharpen` | Sharpening of the picture on its way to the headset, 0 to 1. |
 | `mask` | Blacks out the coloured corners outside the two lens circles of the game's picture (1 = the circles as drawn, 0 = off; 0.9 is the default, the choices go from 0.82 to 1.05). If the circle's edge looks cut off use a higher value (1.05); if some colour is left at the edge use a lower one. |
+| `game` | The game's `eboot.bin`, its folder or its `.pkg`, when it is not in the `games` folder: set by the "Where is the game?" window. |
 | `hands` | `0`: do not place the controller by your hands. |
-| `env` | Extra environment variables for the emulator, as many lines as needed. |
+| `env` | Extra environment variables for the emulator, as many lines as needed. `env=SHADPS4_HITCH_PROBE=1` turns on the stutter probe (see below). |
 
 `fps`, `pace`, `real_time` and `dynamic` are in the file but do
 nothing for this game: it keeps its own pace and picks its picture by itself. (`resolution` of older
@@ -114,8 +127,12 @@ versions is no longer read: it is `eye_width` now.)
 
 ## If something does not work
 
-- **The game says it was not found**: put the game's folder or `.pkg` in the `games` folder, or show
-  the launcher where it is.
+- **The game says it was not found**: choose **Show where it is...** in that window and pick the
+  game's `eboot.bin` or its `.pkg`, or put the game's folder or `.pkg` in the `games` folder of the
+  RushVR folder and choose Look again.
+- **Windows or an antivirus warns about `RushVR.exe`**: the file is not signed, and it unpacks other
+  programs, which some antivirus programs look at twice. The source of everything inside is in this
+  repository (see "Building from source").
 - **Black or waiting in the headset**: the game waits, black, while the headset is off the head or
   shows something else (Virtual Desktop's view of the desktop, for one). Put the headset on and
   make sure Virtual Desktop is streaming; `pause=0` stops the waiting.
@@ -138,7 +155,9 @@ versions is no longer read: it is `eye_width` now.)
   of Virtual Desktop's frame rate (60 at 120 Hz, 45 at 90 Hz, 40 at 80 Hz). To see where the time goes, add the line
   `env=SHADPS4_FRAME_STATS=1` to `settings.txt` and play for a minute: the log then gets a line
   every five seconds with draws and render passes per frame, how long the emulator waits for the
-  graphics card, and how busy each thread is.
+  graphics card, and how busy each thread is. To help find stutters, add `env=SHADPS4_HITCH_PROBE=1`
+  as well: whenever 45 ms or more pass between two shown frames, the log records what each part of
+  the emulator was doing, and the log is what to send.
 - **Reporting a problem**: send `pc-vr\user\log\shad_log.txt` (and `console-errors.txt` from the
   same folder, if there is one) together with what you were doing.
 
@@ -155,8 +174,23 @@ cmake --build Build\x64-Clang-Release --target shadps4 -j 4
 ```
 
 (Open the folder in Visual Studio to make the `x64-Clang-Release` configuration the first time; it
-is described in `CMakeSettings.json`.) Copy the resulting `shadps4.exe` into `pc-vr`, next to
-`launch.ps1` and `settings.txt`, and start the game with `Play Rush of Blood.bat`.
+is described in `CMakeSettings.json`.) For development, copy the
+resulting `shadps4.exe` into `pc-vr`, next to `launch.ps1` and `settings.txt`, and start the game
+with `Play Rush of Blood.bat`.
+
+To make the one-file `RushVR.exe` that is released (Windows PowerShell, from the repository folder,
+with `tools\pkgtool` holding PkgTool as `tools\make-release.ps1` describes):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\make-release.ps1 -Version 0.4.2
+powershell -ExecutionPolicy Bypass -File tools\make-single-exe.ps1 `
+    -From build\release\RushVR-0.4.2-PC-VR-Windows -Out build\single\RushVR-0.4.2.exe
+```
+
+The first command packs the play folder (the emulator, the launcher, PkgTool and the default
+settings); the second puts that folder inside `RushVR.exe`, whose small C# starter is
+`pc-vr\launcher-stub\RushVR.cs` (built with the compiler that comes with Windows). No game files go
+in.
 
 ## License
 
