@@ -344,12 +344,13 @@ static void IndexVerifyScan(VAddr address, u32 count, u32 index_offset, bool gpu
     }
 }
 
-// SHADPS4_DBG_INDEX_REUPLOAD=1: diagnostic / fix candidate for the pig room streaks of Rush of
-// Blood. A capture showed the GPU reading position data from an index buffer whose guest memory
-// (checked with SHADPS4_DBG_INDEX_VERIFY) held proper indices: the GPU's copy was stale, because
-// the page tracking never marked those pages as changed. This copies the index range from the
-// guest's memory into the GPU buffer whenever its contents differ from the last time this range
-// was copied (or the GPU buffer is another one), whatever the tracking says.
+// FIX (Until Dawn: Rush of Blood, level 2 pig room streaks): a capture showed the GPU reading
+// position data from an index buffer whose guest memory (checked with SHADPS4_DBG_INDEX_VERIFY)
+// held proper indices: the GPU's copy was stale, because the page tracking never had those pages
+// uploaded. This copies the index range from the guest's memory into the GPU buffer whenever its
+// contents differ from the last time this range was copied (or the GPU buffer is another one),
+// whatever the tracking says. A test run copied 588 ranges and skipped 1.6 million; the streaks
+// were gone. On by default; SHADPS4_NO_INDEX_REUPLOAD=1 turns it off for comparison.
 static bool IndexRangeNeedsUpload(VAddr address, u32 bytes, u64 buffer_id) {
     struct Entry {
         u32 bytes;
@@ -419,7 +420,7 @@ void BufferCache::BindIndexBuffer(u32 index_offset) {
                         IsRegionGpuModified(index_address, index_buffer_size));
     }
     const auto [vk_buffer, offset] = ObtainBuffer(index_address, index_buffer_size, false);
-    static const bool index_reupload = std::getenv("SHADPS4_DBG_INDEX_REUPLOAD") != nullptr;
+    static const bool index_reupload = std::getenv("SHADPS4_NO_INDEX_REUPLOAD") == nullptr;
     if (index_reupload && index_buffer_size != 0 &&
         vk_buffer->IsInBounds(index_address, index_buffer_size) &&
         Core::Memory::Instance()->IsValidMapping(index_address, index_buffer_size) &&
