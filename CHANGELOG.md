@@ -3,6 +3,22 @@
 All notable changes to RushVR, newest first. RushVR is shadPS4 plus a VR layer and the fixes that
 let Until Dawn: Rush of Blood run under emulation.
 
+## 0.4.5 - 2026-11-02
+
+- **Level 2 (the pig room): the long black streaks are fixed.** Some of the level's index data
+  (which points of its models form triangles) was wrong on the graphics card from the start; the
+  emulator now copies each used index range from the game's memory once more the first time it is
+  drawn (`SHADPS4_NO_INDEX_REUPLOAD=1` turns this off for comparing). No loss of frame rate was
+  measured. (The 0.4.1 notes said these streaks were fixed; they were not. This is the real fix.)
+- **Level 1: the flashlight's shadows are right.** They used to split into extra lines, turn black
+  where they should not be and flicker while the light moved. The cause was PS4 Pro mode, which
+  is therefore gone and always off: the start-up window no longer has the toggle, and the launcher
+  switches `neo_mode` in `user\config.json` off every time the game starts. No difference in
+  textures was seen with it off.
+- Diagnostics for testers (off by default): `SHADPS4_DBG_INDEX_VERIFY=1` checks the index data in
+  the pig room, `SHADPS4_FRESH_BUFFERS_HASH=<shader hash>` re-reads one shader's buffers from the
+  game's memory on every draw.
+
 ## 0.4.2 - 2026-10-25
 
 RushVR is now ONE file, `RushVR.exe`, and it is the only download. (The Motion edition has the same

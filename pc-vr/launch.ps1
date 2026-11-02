@@ -80,10 +80,12 @@ function Test-MotionEdition {
 }
 $motionEdition = Test-MotionEdition
 # The version shown in the window's banner (the release scripts check that it is the release's).
-$launcherVersion = "0.4.2"
+$launcherVersion = "0.4.5"
 
-# PS4 Pro mode ("neo_mode" in user\config.json): the emulator then tells the game it runs on a
-# PlayStation 4 Pro, which gives sharper textures. The emulator reads it as it starts.
+# PS4 Pro mode ("neo_mode" in user\config.json) is always switched OFF now (see the call just
+# before the emulator starts): with it on, the game's flashlight shadows split into extra lines
+# and flicker; with it off they are right, and no texture difference was seen. The emulator reads
+# it as it starts.
 $configFile = Join-Path $here "user\config.json"
 function Get-NeoMode {
     try {
@@ -2080,12 +2082,6 @@ function Show-MenuModern {
         & $updateStatus
 
         # Bottom row.
-        $neo = New-Object RushUi.Toggle
-        $neo.Text = "PS4 Pro mode (sharper textures)"
-        $neo.Checked = Get-NeoMode
-        $neo.SetBounds(24, 600, 380, 26)
-        $form.Controls.Add($neo)
-        $tips.SetToolTip($neo, "The game is told it runs on a PlayStation 4 Pro, which gives sharper textures. Takes effect as the game starts.")
         $again = New-Object RushUi.Toggle
         $again.Text = "Show this window at every start"
         $again.Checked = (Setting "menu" "1") -ne "0"
@@ -2116,8 +2112,7 @@ function Show-MenuModern {
             $y += $windowCard.Height + 12
             $moveCard.SetBounds(24, $y, 688, $moveHeight)
             $y += $moveHeight + 14
-            $neo.SetBounds(24, $y, 380, 26)
-            $again.SetBounds(24, ($y + 30), 380, 26)
+            $again.SetBounds(24, ($y + 15), 380, 26)
             $quit.SetBounds(476, ($y + 8), 104, 40)
             $play.SetBounds(592, ($y + 8), 120, 40)
             $form.ClientSize = New-Object System.Drawing.Size(736, ($y + 62 + 33))
@@ -2169,7 +2164,6 @@ function Show-MenuModern {
         for ($i = 0; $i -lt 3; $i++) { Save-Setting $moveKeys[$i] ("" + $moveSliders[$i].Value) }
     }
     Save-Setting "menu" ($(if ($again.Checked) { "1" } else { "0" }))
-    Set-NeoMode $neo.Checked
     Read-Settings
     $script:menuOutcome = "play"
 }
@@ -2440,6 +2434,10 @@ try {
         Say ""
     }
 } catch {}
+
+# PS4 Pro mode is always off (it broke the flashlight shadows); this also corrects copies whose
+# config still has it on.
+Set-NeoMode $false
 
 # --- run --------------------------------------------------------------------------------------
 $logDir = Join-Path $here "user\log"

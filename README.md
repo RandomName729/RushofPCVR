@@ -1,171 +1,240 @@
+<div align="center">
+
 # RushVR
 
-**Until Dawn: Rush of Blood (PS4 / PlayStation VR) in virtual reality on a Windows PC**, shown in a
-Meta Quest 3 through Virtual Desktop (or in any other OpenXR headset), played from your own copy of
-the game through a PS4 emulator.
+### *Until Dawn: Rush of Blood* in virtual reality on a Windows PC
 
-The emulator is [shadPS4](https://github.com/shadps4-emu/shadPS4), to which this project adds what
+Play the PlayStation VR game on a **Meta Quest 3** through Virtual Desktop (or any OpenXR headset),
+from your own copy of the game, through a PS4 emulator.
+
+[![Version](https://img.shields.io/badge/version-0.4.5-2f81f7?style=flat-square)](CHANGELOG.md)
+[![License](https://img.shields.io/badge/license-GPL--2.0--or--later-3fb950?style=flat-square)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-8957e5?style=flat-square)](#requirements)
+[![Headset](https://img.shields.io/badge/headset-Quest%203%20%C2%B7%20OpenXR-f0883e?style=flat-square)](#requirements)
+
+**EVERYTHING WILL BE OUT FOR FREE AT THE v1.0 RELEASE**
+
+[Download](https://github.com/RandomName729/RushofPCVR/releases) &nbsp;·&nbsp;
+[Quick start](#quick-start) &nbsp;·&nbsp;
+[Settings](#settings) &nbsp;·&nbsp;
+[Troubleshooting](#troubleshooting) &nbsp;·&nbsp;
+[Changelog](CHANGELOG.md)
+
+</div>
+
+---
+
+> [!IMPORTANT]
+> **No game files are included or distributed.** You need your own copy of *Until Dawn: Rush of
+> Blood*, dumped from your own PlayStation 4.
+
+## What this is
+
+RushVR is [shadPS4](https://github.com/shadps4-emu/shadPS4), a PlayStation 4 emulator, plus what
 the game needs from a PlayStation VR: the headset, its tracking and reprojection, the controller
 the game expects, and fixes that let this one title run under emulation (its streaming copies, its
 depth buffers, its timing and resolution).
 
-> **No game files are included or distributed.** You need your own copy of Until Dawn: Rush of
-> Blood, dumped from your own PlayStation 4.
-
-EVERYTHING WILL BE OUT FOR FREE AT THE v1.0 RELEASE
+| | |
+| --- | --- |
+| **One file** | `RushVR.exe` is the whole download. It unpacks itself on first start and remembers your game. |
+| **Start-up window** | Low / Medium / High picture buttons, field of view, sharpness, edge smoothing, frame rate, and what the monitor shows. |
+| **Sharper than the console** | The game can draw up to 2880 x 3240 pixels an eye (the console draws 1152 x 1296). |
+| **Made for Virtual Desktop** | Held to 60 fps against a 120 Hz stream, with the console's own speed kept so captions stay with the voice. SteamVR works too. |
+| **DualSense controls** | Buttons, sticks, touchpad and motion sensors. The Motion edition plays with the Quest controllers as PlayStation Move wands. |
 
 ## Status
 
-**Early work in progress** (version 0.4.2), built and tested by one person on one PC and one Quest 3.
-See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
+> [!NOTE]
+> **Early work in progress, version 0.4.5**, built and tested by one person on one PC and one
+> Quest 3. Expect rough edges, and please report what you find
+> ([Troubleshooting](#troubleshooting)).
 
-- The title screen, the intro and **levels 1 to 4** play through (the tester went as far as level
-  4; later levels are untested).
-- Controls: the **DualSense** is the controller (buttons, sticks, touchpad, motion sensors). The
-  start-up window has a "Controllers" card for playing with the Quest controllers as PlayStation
-  Move wands; it is switched off (greyed out) here, because that comes with the separate Motion
-  edition, not with this free one. In this edition the headset's own controllers do not play the
-  game, and the Move controllers are not supported.
-- Speed: with Virtual Desktop at 120 Hz the game is held to 60 frames a second and, on a high-end
-  laptop (Core i9-14900HX, GeForce RTX 4080 Laptop) at 2304 pixels an eye, ran at a median of about
-  50 in level 1, mostly between 43 and 60. The game keeps its console speed: the captions stay with
-  the voice. Heavy scenes still dip, and the game can freeze for a second or more now and then.
-- Sharpness: the console draws each eye at 1152 x 1296 pixels, and a Quest 3 shows that over a wide
-  view, so the picture looks soft at that size. The `eye_width` setting (a slider in the start-up
-  window) makes the game draw larger, up to 2880 x 3240 an eye; it costs graphics-card time and
-  memory. The coloured corners around the game's two lens circles are blacked out (`mask`), so the
-  field of view can stay at 120 for the smoothest picture without borders; `fxaa` smooths the
-  edges and `aniso` keeps slanted textures sharp. **The picture can still look pixelated or soft in
-  the headset**, especially in dark scenes: this is being worked on.
-- Known picture problems: the effects that read the depth buffer as a colour are shaded
-  differently from the console, and textures whose largest level has not loaded are shown one
-  level lower (a little softer).
-- Known problems: **in level 2 (the pig room) long black streaks can cover the screen** (not fixed
-  yet); the flashlight's shadows can jump or show extra lines; the player's arms can look dark in
-  the intro; small stutters now and then (see "Slow or stuttering" below for how to help find the
-  cause).
-- Expect rough edges, and please report what you find (see "If something does not work").
+**Works:** the title screen, the intro and **levels 1 to 4** play through. Later levels are untested.
+On a high-end laptop (Core i9-14900HX, RTX 4080 Laptop) at 2304 pixels an eye the game ran at a
+median of about 50 fps in level 1, mostly between 43 and 60.
 
-## What you need
+**Known problems:**
 
-- **A Meta Quest 3** with [Virtual Desktop](https://www.vrdesktop.net/) (the app on the headset and
-  the Streamer on the PC). Other OpenXR headsets may work; nobody has tried.
-- **A PS5 DualSense controller**, connected to the PC itself (USB cable or Bluetooth paired with the
-  PC, not with the headset: paired with the headset it reaches the PC without motion sensors and
-  touchpad). The game is played with it alone: the headset's own controllers do not play.
-- **Until Dawn: Rush of Blood, US release CUSA03683, version 1.00** (the European release,
-  CUSA02350 version 1.00, has been reported to start and play as well), dumped from your own console
-  and game: either as the game's folder (the one with `eboot.bin`, `sce_sys` and `sce_module` in
-  it) or as the `.pkg` package made from the dump. A package downloaded from the PlayStation Store
-  is encrypted and cannot be used. Other versions are untested.
-- **A Windows 10 or 11 (64-bit) PC** with a graphics card that supports Vulkan 1.3, 16 GB of memory
-  or more, and the
-  [Microsoft Visual C++ Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe) (the
-  launcher says so if it is missing).
+- The picture can still look pixelated or soft in the headset, especially in dark scenes. The effects
+  that read the depth buffer as a colour are shaded differently from the console, and textures whose
+  largest level has not loaded show one level lower.
+- Small stutters now and then, and the game can freeze for a second or more. See
+  [Slow or stuttering](#troubleshooting) for how to help find the cause.
+- The player's arms can look dark in the intro.
+- The game sometimes stops after level 1.
 
-## Installing and playing
+The free edition is played with the **DualSense**; the headset's own controllers do not play the
+game. The start-up window has a greyed-out "Controllers" card, which comes with the separate Motion
+edition.
 
-1. **Download `RushVR.exe`** from the [Releases](https://github.com/RandomName729/RushofPCVR/releases) page and put it anywhere (a
-   short folder such as `C:\Games\RushVR` is fine). It is the only file you need. The first time
-   you start it, it unpacks the emulator and its tools to `%LOCALAPPDATA%\RushVR` (set the
-   `RUSHVR_HOME` environment variable first to use another folder or drive) and opens the start-up
-   window. To update, download the newer `RushVR.exe` and start it: your settings and saves stay.
-   Windows may warn about an unknown publisher (the file is not signed): choose "More info", then
-   "Run anyway".
-2. **Show it your copy of the game.** The first time, a window asks "Where is the game?": choose
-   **Show where it is...** and pick the `eboot.bin` in the game's folder, or the `.pkg` file (a
-   package is unpacked once, which takes a minute or so, into the `games` folder of the RushVR
-   folder; it needs about 13 GB). The game can stay where it is; RushVR remembers the choice
-   (`game=` in the settings). Some of the game's files have long names. Since 0.4.1 the emulator
-   opens them even when the full path passes Windows' 260 characters, but a short path for the
-   game's folder (`C:\Games\Rush`, say) is still the safest.
-3. **Set up Virtual Desktop**: install the Streamer on the PC and, in its options, choose **VDXR**
-   as the OpenXR runtime. In the headset, in Virtual Desktop's streaming settings, set the frame
-   rate to **120**. (SteamVR can be used instead: choose it under "Headset connection" in the
-   start-up window, with the headset connected to SteamVR first. It has been tested through
-   level 4 and runs well.)
-4. **Connect the DualSense to the PC.**
-5. **Connect to the PC with Virtual Desktop**, then start **`RushVR.exe`**
-   on the desktop you see in the headset. A small window lets you choose the headset connection (Virtual Desktop
-   or SteamVR), the resolution, the field of view, texture sharpness, edge smoothing, the corner
-   mask, the frame rate and PS4 Pro mode (and, in the Motion edition only, the Quest controllers); Play starts the game, and the headset switches to it after a few seconds.
-6. In the game's own start-up question, choose the **DualShock** controller, not the Move
-   controllers.
+## Requirements
 
-Your settings, saves and the log are in the RushVR folder (`%LOCALAPPDATA%\RushVR`): the settings
-are `pc-vr\settings.txt`, the log is `pc-vr\user\log\shad_log.txt`, the saves are in
-`pc-vr\user\home`.
+| You need | Details |
+| --- | --- |
+| **Headset** | A **Meta Quest 3** with [Virtual Desktop](https://www.vrdesktop.net/) (the app on the headset and the Streamer on the PC). Other OpenXR headsets may work; nobody has tried. |
+| **Controller** | A **PS5 DualSense** connected to the PC itself (USB, or Bluetooth paired with the PC, not the headset: paired with the headset it reaches the PC without motion sensors and touchpad). |
+| **Game** | *Until Dawn: Rush of Blood*, US release **CUSA03683, version 1.00**, dumped from your own console and game: the game's folder (the one with `eboot.bin`, `sce_sys` and `sce_module`) or the `.pkg` made from the dump. A package downloaded from the PlayStation Store is encrypted and cannot be used. The European release (CUSA02350 1.00) has been reported to start and play as well; other versions are untested. |
+| **PC** | Windows 10 or 11 (64-bit), a graphics card with **Vulkan 1.3**, 16 GB of memory or more, and the [Microsoft Visual C++ Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe) (the launcher says so if it is missing). |
+
+## Quick start
+
+1. **Download `RushVR.exe`** from [Releases](https://github.com/RandomName729/RushofPCVR/releases) and
+   put it anywhere (a short folder such as `C:\Games\RushVR` is fine). The first start unpacks the
+   emulator and its tools to `%LOCALAPPDATA%\RushVR` (set `RUSHVR_HOME` first to use another folder
+   or drive) and opens the start-up window. To update, download the newer `RushVR.exe` and start it:
+   your settings and saves stay. Windows may warn about an unknown publisher (the file is not
+   signed): choose **More info**, then **Run anyway**.
+2. **Show it your game.** The first time, choose **Show where it is...** and pick the `eboot.bin` in
+   the game's folder, or the `.pkg` (unpacked once into the RushVR folder, about 13 GB, a minute or
+   so). The game can stay where it is; RushVR remembers it. A short path (`C:\Games\Rush`) is the
+   safest, though since 0.4.1 paths over Windows' 260 characters open too.
+3. **Set up Virtual Desktop.** Install the Streamer on the PC and choose **VDXR** as its OpenXR
+   runtime. In the headset, set the streaming frame rate to **120**. (SteamVR works instead: choose
+   it under "Headset connection" with the headset connected to SteamVR first; tested through level 4.)
+4. **Connect the DualSense to the PC**, then connect to the PC with Virtual Desktop and start
+   `RushVR.exe` on the desktop you see in the headset.
+5. **Pick a picture quality and press Play.** The headset switches to the game after a few seconds.
+6. In the game's own start-up question, choose the **DualShock**, not the Move controllers.
+
+Settings, saves and the log live in `%LOCALAPPDATA%\RushVR`: settings in `pc-vr\settings.txt`, the
+log in `pc-vr\user\log\shad_log.txt`, saves in `pc-vr\user\home`.
 
 ## Settings
 
-Settings are in `pc-vr\settings.txt` (inside the RushVR folder), one `key=value` a line (the small window at start-up changes
-the main ones and writes them there; `menu=0` stops it from coming up). Lines starting with `#` are
-ignored, and each setting is explained in the file itself. The ones to know:
+The start-up window changes the main ones and writes them to `pc-vr\settings.txt`, one `key=value`
+a line (`menu=0` stops the window from coming up). Lines starting with `#` are ignored, and each
+setting is explained in the file itself.
+
+<details>
+<summary><b>All settings</b></summary>
+
+<br>
 
 | Setting | What it does |
 | --- | --- |
-| `fov` | How much of the headset's field of view the game draws, in percent. **105 is the default: a little wider than a PlayStation VR's own view, sharp with hardly a border** (100 is the PlayStation VR's own view: sharpest, with a dark border) (`mask` blacks out the coloured corners outside the game's lens-shaped circles). More draws a wider, softer view with no border (120 and up). |
+| `fov` | How much of the headset's field of view the game draws, in percent. **105 is the default: a little wider than a PlayStation VR's own view, sharp with hardly a border** (100 is the PlayStation VR's own view: sharpest, with a dark border). More draws a wider, softer view with no border (120 and up). |
 | `fov_of` | What that percent is of: `psvr` (a PlayStation VR's own view, the default) or `headset`. |
 | `runtime` | Which OpenXR runtime the game uses: `pc` (the one the PC has set up, the default), `virtualdesktop`, `steamvr`, or the full path of a runtime's `.json` file. Also in the start-up window. |
-| `eye_width` | The width in pixels each eye is drawn at, 1152 to 2880 (the default is 2304). 1152 is what the console draws; larger is sharper in the headset, and slower, and takes more memory. In the start-up window the Low, Medium and High buttons are 1536, 2304 and 2880. |
+| `eye_width` | The width in pixels each eye is drawn at, 1152 to 2880 (default 2304). 1152 is what the console draws; larger is sharper, slower and takes more memory. The Low, Medium and High buttons are 1536, 2304 and 2880. |
 | `target_fps` | The frame rate the game is held to, 20 to 60 (0 leaves the game's own timing). **60 is the default**, steady with Virtual Desktop at 120 Hz; use 45 at 90 Hz and 40 at 80 Hz. Also in the start-up window ("Aim for"). |
-| `aniso` | Anisotropic filtering of the game's textures: 0 (as the game draws them), 2, 4, 8 or 16 (default). Also in the start-up window. |
-| `fxaa` | Smooths the picture's edges on its way to the headset: 0 off, 0.35 light, 0.65 normal (default), 1 strong. Also in the start-up window. |
-| `pc_view` | What the game's window on the PC shows (the headset is not affected; a screen recording sees this): `left` (the default) or `right`, that eye's picture cropped to fill the window like a normal game; `merged`, both eyes joined into one flat picture (the left eye's view fades into the right eye's across the middle, so things very close up can look doubled there); `both`, the whole picture with both lens circles. Also in the start-up window ("PC window"). |
-| `pc_zoom` | How close in the cropped and merged views are, in percent: 100 (the default) is the most that fits the window without black corners. |
-| `layer_scale` | The size of the picture handed to the headset's runtime, in percent of the size the game draws it at: 100, 75 or 50 (when it is not set: 50 from an `eye_width` of 2048 up, 100 below). Shrinking it here, with a smoother filter than Virtual Desktop's, gives the PC and the stream less to carry and makes a large picture look smoother, at some cost in sharpness. In the start-up window as "Picture size sent to the headset"; the Low, Medium and High buttons set it together with `eye_width`, `aniso`, `fxaa` and `sharpen`. |
-| `msaa`, `antialias` | Multisampling limits for games that use it. Rush of Blood draws without multisampling, so they change nothing here; use `fxaa` and a larger `eye_width` instead. |
+| `aniso` | Anisotropic filtering of the game's textures: 0, 2, 4, 8 or 16 (default). |
+| `fxaa` | Smooths the picture's edges on its way to the headset: 0 off, 0.35 light, 0.65 normal (default), 1 strong. |
 | `sharpen` | Sharpening of the picture on its way to the headset, 0 to 1. |
-| `mask` | Blacks out the coloured corners outside the two lens circles of the game's picture (1 = the circles as drawn, 0 = off; 0.9 is the default, the choices go from 0.82 to 1.05). If the circle's edge looks cut off use a higher value (1.05); if some colour is left at the edge use a lower one. |
-| `game` | The game's `eboot.bin`, its folder or its `.pkg`, when it is not in the `games` folder: set by the "Where is the game?" window. |
+| `mask` | Blacks out the coloured corners outside the two lens circles (1 = the circles as drawn, 0 = off; 0.9 is the default, the choices go from 0.82 to 1.05). If the circle's edge looks cut off use a higher value (1.05); if some colour is left at the edge use a lower one. |
+| `layer_scale` | The size of the picture handed to the headset's runtime, in percent of what the game draws: 100, 75 or 50 (when not set: 50 from an `eye_width` of 2048 up, 100 below). Shrinking it here, with a smoother filter than Virtual Desktop's, gives the PC and the stream less to carry, at some cost in sharpness. The Low, Medium and High buttons set it together with `eye_width`, `aniso`, `fxaa` and `sharpen`. |
+| `pc_view` | What the game's window on the PC shows (the headset is not affected): `left` (default) or `right`, that eye's picture cropped to fill the window; `merged`, both eyes joined into one flat picture (things very close up can look doubled across the middle); `both`, the whole picture with both lens circles. |
+| `pc_zoom` | How close in the cropped and merged views are, in percent: 100 (default) is the most that fits the window without black corners. |
+| `msaa`, `antialias` | Multisampling limits for games that use it. Rush of Blood draws without multisampling, so they change nothing here. |
+| `game` | The game's `eboot.bin`, its folder or its `.pkg`, when it is not in the `games` folder (set by the "Where is the game?" window). |
 | `hands` | `0`: do not place the controller by your hands. |
 | `env` | Extra environment variables for the emulator, as many lines as needed. `env=SHADPS4_HITCH_PROBE=1` turns on the stutter probe (see below). |
 
-`fps`, `pace`, `real_time` and `dynamic` are in the file but do
-nothing for this game: it keeps its own pace and picks its picture by itself. (`resolution` of older
-versions is no longer read: it is `eye_width` now.)
+`fps`, `pace`, `real_time` and `dynamic` are in the file but do nothing for this game: it keeps its
+own pace and picks its picture by itself. (`resolution` of older versions is no longer read: it is
+`eye_width` now.)
 
-## If something does not work
+</details>
 
-- **The game says it was not found**: choose **Show where it is...** in that window and pick the
-  game's `eboot.bin` or its `.pkg`, or put the game's folder or `.pkg` in the `games` folder of the
-  RushVR folder and choose Look again.
-- **Windows or an antivirus warns about `RushVR.exe`**: the file is not signed, and it unpacks other
-  programs, which some antivirus programs look at twice. The source of everything inside is in this
-  repository (see "Building from source").
-- **Black or waiting in the headset**: the game waits, black, while the headset is off the head or
-  shows something else (Virtual Desktop's view of the desktop, for one). Put the headset on and
-  make sure Virtual Desktop is streaming; `pause=0` stops the waiting.
-- **The picture looks soft or pixelated**: the console draws each eye at only 1152 x 1296 pixels.
-  Raise `eye_width` (the slider in the start-up window; 2304 is the default, 2880 the largest), keep
-  "PS4 Pro mode" on, and in Virtual Desktop try a higher bitrate and HEVC 10-bit or AV1. A
-  smaller `fov` (100 is the game's own view, 105 is the default) puts the same pixels over fewer degrees: sharper, with a
-  dark border. `sharpen` can be raised a little.
-- **Circles in the PC window**: the picture the game draws holds one circle for each eye. The
-  window shows one eye cropped to fill it, like a normal game, unless `pc_view` ("PC window" in the
-  start-up window) says `both` (the two circles) or `merged` (both eyes joined into one picture).
-- **Windows runs out of memory at a large `eye_width`** (2688 and 2880 especially, the log says
-  something like "Insufficient system resources", or the game closes): Windows has a limit on
-  memory it can promise (RAM plus the page file), and the game asks for a lot of it. Give Windows a
-  bigger page file (Settings, System, About, Advanced system settings, Performance, Advanced,
-  Virtual memory: a custom size of 32768 MB initial and 49152 MB maximum on the system drive), and
-  restart the PC. The emulator also frees pictures nothing has used for a while when Windows
-  has less than 3 GB of that left, and writes `MEMSTAT` lines to the log every ten seconds.
-- **Slow or stuttering**: lower `eye_width` (1152 is the console's size), and set "Aim for" to half
-  of Virtual Desktop's frame rate (60 at 120 Hz, 45 at 90 Hz, 40 at 80 Hz). To see where the time goes, add the line
-  `env=SHADPS4_FRAME_STATS=1` to `settings.txt` and play for a minute: the log then gets a line
-  every five seconds with draws and render passes per frame, how long the emulator waits for the
-  graphics card, and how busy each thread is. To help find stutters, add `env=SHADPS4_HITCH_PROBE=1`
-  as well: whenever 45 ms or more pass between two shown frames, the log records what each part of
-  the emulator was doing, and the log is what to send.
-- **Reporting a problem**: send `pc-vr\user\log\shad_log.txt` (and `console-errors.txt` from the
-  same folder, if there is one) together with what you were doing.
+## Troubleshooting
+
+<details>
+<summary><b>The game says it was not found</b></summary>
+
+<br>
+
+Choose **Show where it is...** in that window and pick the game's `eboot.bin` or its `.pkg`, or put
+the game's folder or `.pkg` in the `games` folder of the RushVR folder and choose Look again.
+
+</details>
+
+<details>
+<summary><b>Windows or an antivirus warns about RushVR.exe</b></summary>
+
+<br>
+
+The file is not signed, and it unpacks other programs, which some antivirus programs look at twice.
+The source of everything inside is in this repository (see [Building from source](#building-from-source)).
+
+</details>
+
+<details>
+<summary><b>Black or waiting in the headset</b></summary>
+
+<br>
+
+The game waits, black, while the headset is off the head or shows something else (Virtual Desktop's
+view of the desktop, for one). Put the headset on and make sure Virtual Desktop is streaming;
+`pause=0` stops the waiting.
+
+</details>
+
+<details>
+<summary><b>The picture looks soft or pixelated</b></summary>
+
+<br>
+
+The console draws each eye at only 1152 x 1296 pixels. Raise `eye_width` (2304 is the default, 2880
+the largest), and in Virtual Desktop try a higher bitrate and HEVC 10-bit or AV1. A smaller `fov`
+(100 is the game's own view) puts the same pixels over fewer degrees: sharper, with a dark border.
+`sharpen` can be raised a little.
+
+</details>
+
+<details>
+<summary><b>Circles in the PC window</b></summary>
+
+<br>
+
+The picture the game draws holds one circle for each eye. The window shows one eye cropped to fill
+it, like a normal game, unless `pc_view` ("PC window" in the start-up window) says `both` (the two
+circles) or `merged` (both eyes joined into one picture).
+
+</details>
+
+<details>
+<summary><b>Windows runs out of memory at a large eye_width</b></summary>
+
+<br>
+
+At 2688 and 2880 especially, the log says something like "Insufficient system resources", or the
+game closes. Windows has a limit on memory it can promise (RAM plus the page file), and the game
+asks for a lot of it. Give Windows a bigger page file (Settings, System, About, Advanced system
+settings, Performance, Advanced, Virtual memory: a custom size of 32768 MB initial and 49152 MB
+maximum on the system drive) and restart the PC. The emulator also frees pictures nothing has used
+for a while when Windows has less than 3 GB of that left, and writes `MEMSTAT` lines to the log
+every ten seconds.
+
+</details>
+
+<details>
+<summary><b>Slow or stuttering</b></summary>
+
+<br>
+
+Lower `eye_width` (1152 is the console's size), and set "Aim for" to half of Virtual Desktop's frame
+rate (60 at 120 Hz, 45 at 90 Hz, 40 at 80 Hz). To see where the time goes, add the line
+`env=SHADPS4_FRAME_STATS=1` to `settings.txt` and play for a minute: the log then gets a line every
+five seconds with draws and render passes per frame, how long the emulator waits for the graphics
+card, and how busy each thread is. To help find stutters, add `env=SHADPS4_HITCH_PROBE=1` as well:
+whenever 45 ms or more pass between two shown frames, the log records what each part of the
+emulator was doing. The log is what to send.
+
+</details>
+
+**Reporting a problem:** send `pc-vr\user\log\shad_log.txt` (and `console-errors.txt` from the same
+folder, if there is one) together with what you were doing.
 
 ## Building from source
 
+<details>
+<summary><b>Build the emulator and the one-file RushVR.exe</b></summary>
+
+<br>
+
 The source is in `shadps4-arm64-main` (the emulator, with the VR layer in `src/core/vr`). On Windows,
-with Visual Studio 2022 (C++ and CMake tools, and the Clang compiler) or any recent Clang, CMake
-and Ninja:
+with Visual Studio 2022 (C++ and CMake tools, and the Clang compiler) or any recent Clang, CMake and
+Ninja:
 
 ```sh
 git clone --recurse-submodules <this repository>
@@ -173,24 +242,25 @@ cd shadps4-arm64-main
 cmake --build Build\x64-Clang-Release --target shadps4 -j 4
 ```
 
-(Open the folder in Visual Studio to make the `x64-Clang-Release` configuration the first time; it
-is described in `CMakeSettings.json`.) For development, copy the
-resulting `shadps4.exe` into `pc-vr`, next to `launch.ps1` and `settings.txt`, and start the game
-with `Play Rush of Blood.bat`.
+(Open the folder in Visual Studio to make the `x64-Clang-Release` configuration the first time; it is
+described in `CMakeSettings.json`.) For development, copy the resulting `shadps4.exe` into `pc-vr`,
+next to `launch.ps1` and `settings.txt`, and start the game with `Play Rush of Blood.bat`.
 
 To make the one-file `RushVR.exe` that is released (Windows PowerShell, from the repository folder,
 with `tools\pkgtool` holding PkgTool as `tools\make-release.ps1` describes):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\make-release.ps1 -Version 0.4.2
+powershell -ExecutionPolicy Bypass -File tools\make-release.ps1 -Version 0.4.5
 powershell -ExecutionPolicy Bypass -File tools\make-single-exe.ps1 `
-    -From build\release\RushVR-0.4.2-PC-VR-Windows -Out build\single\RushVR-0.4.2.exe
+    -From build\release\RushVR-0.4.5-PC-VR-Windows -Out build\single\RushVR-0.4.5.exe
 ```
 
 The first command packs the play folder (the emulator, the launcher, PkgTool and the default
 settings); the second puts that folder inside `RushVR.exe`, whose small C# starter is
 `pc-vr\launcher-stub\RushVR.cs` (built with the compiler that comes with Windows). No game files go
 in.
+
+</details>
 
 ## License
 
@@ -202,10 +272,10 @@ The libraries under `shadps4-arm64-main/externals` keep their own licenses (see
 `shadps4-arm64-main/LICENSES`), and so does the [Khronos OpenXR SDK](https://www.khronos.org/openxr/)
 (Apache-2.0).
 
-Until Dawn: Rush of Blood, PlayStation and PlayStation VR are trademarks of Sony Interactive
+*Until Dawn: Rush of Blood*, PlayStation and PlayStation VR are trademarks of Sony Interactive
 Entertainment. This project is not affiliated with, endorsed or sponsored by Sony Interactive
-Entertainment, Supermassive Games or Meta. It contains no game, firmware, keys or other
-copyrighted console files.
+Entertainment, Supermassive Games or Meta. It contains no game, firmware, keys or other copyrighted
+console files.
 
 ## Thanks
 
@@ -215,9 +285,9 @@ copyrighted console files.
 - [zenithblue-oss/shadps4-arm64](https://github.com/zenithblue-oss/shadps4-arm64), whose tree of
   shadPS4 this project started from.
 - [bigmak94/AstroQuest](https://github.com/bigmak94/AstroQuest), the PlayStation VR layer for
-  another game that this port was begun from: the virtual headset, its tracking and the
-  OpenXR output.
-- [LibOrbisPkg](https://github.com/maxton/LibOrbisPkg), whose PkgTool unpacks game packages for
-  the launcher.
+  another game that this port was begun from: the virtual headset, its tracking and the OpenXR
+  output.
+- [LibOrbisPkg](https://github.com/maxton/LibOrbisPkg), whose PkgTool unpacks game packages for the
+  launcher.
 - [The Khronos Group](https://www.khronos.org/) for OpenXR and Vulkan, and
   [Virtual Desktop](https://www.vrdesktop.net/) for the PC streaming path.
