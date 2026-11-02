@@ -295,6 +295,53 @@ void BufferCache::BindVertexBuffers(const Vulkan::GraphicsPipeline& pipeline) {
     }
 }
 
+// SHADPS4_DBG_INDEX_VERIFY=1: diagnostic. Scans the guest's own index data of every 16-bit indexed
+// draw. Rush of Blood's pig room shows long streaks; a capture showed a draw whose index list was
+// really 8-byte records of three 16-bit numbers and a zero (packed vertex data). This tells apart
+// "the guest memory holds the wrong data" (flagged here) from "the guest memory is right and the
+// copy the GPU reads is stale" (nothing flagged here, streaks still there).
+static void IndexVerifyScan(VAddr address, u32 count, u32 index_offset, bool gpu_modified) {
+    static std::atomic<u64> checked{0};
+    static std::atomic<u64> bad{0};
+    static std::atomic<u32> logged{0};
+    const u64 number = checked.fetch_add(1) + 1;
+    const u16* const idx = reinterpret_cast<const u16*>(address);
+    const u32 n = std::min<u32>(count, 4096u) & ~3u;
+    if (n < 64) {
+        return;
+    }
+    u32 zero_third = 0;
+    u32 zero_other = 0;
+    u32 max_value = 0;
+    for (u32 i = 0; i < n; ++i) {
+        const u16 v = idx[i];
+        max_value = std::max<u32>(max_value, v);
+        if ((i & 3) == 3) {
+            zero_third += (v == 0);
+        } else {
+            zero_other += (v == 0);
+        }
+    }
+    const u32 groups = n / 4;
+    const bool looks_like_records = zero_third * 10 >= groups * 9 && zero_other * 10 <= (n - groups);
+    if (looks_like_records) {
+        bad.fetch_add(1);
+    }
+    const u32 line = looks_like_records ? logged.fetch_add(1) : 0;
+    if ((looks_like_records && line < 200) || number <= 12) {
+        LOG_WARNING(Render_Vulkan,
+                    "INDEXVERIFY: {} guest index data at {:#x} (indices {}, first index {}, gpu_modified {}): "
+                    "zero at every 4th {}/{}, zero elsewhere {}/{}, max {} | {} {} {} {} {} {} {} {}",
+                    looks_like_records ? "BAD (looks like vertex records)" : "ok", address, count,
+                    index_offset, gpu_modified, zero_third, groups, zero_other, n - groups, max_value,
+                    idx[0], idx[1], idx[2], idx[3], idx[4], idx[5], idx[6], idx[7]);
+    }
+    if ((number % 5000) == 0) {
+        LOG_WARNING(Render_Vulkan, "INDEXVERIFY: {} indexed draws checked, {} with bad index data",
+                    number, bad.load());
+    }
+}
+
 void BufferCache::BindIndexBuffer(u32 index_offset) {
     const auto& regs = liverpool->regs;
 
@@ -307,6 +354,12 @@ void BufferCache::BindIndexBuffer(u32 index_offset) {
 
     // Bind index buffer.
     const u32 index_buffer_size = regs.num_indices * index_size;
+    static const bool index_verify = std::getenv("SHADPS4_DBG_INDEX_VERIFY") != nullptr;
+    if (index_verify && is_index16 &&
+        Core::Memory::Instance()->IsValidMapping(index_address, index_buffer_size)) {
+        IndexVerifyScan(index_address, regs.num_indices, index_offset,
+                        IsRegionGpuModified(index_address, index_buffer_size));
+    }
     const auto [vk_buffer, offset] = ObtainBuffer(index_address, index_buffer_size, false);
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindIndexBuffer(vk_buffer->Handle(), offset, index_type);
