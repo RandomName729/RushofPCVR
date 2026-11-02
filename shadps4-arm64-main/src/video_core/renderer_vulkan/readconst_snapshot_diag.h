@@ -5,6 +5,7 @@
 
 #include <bit>
 #include <cmath>
+#include <cstdlib>
 #include <span>
 
 #include "common/types.h"
@@ -23,6 +24,21 @@ inline constexpr u64 kDsrSkinnedVs27904a0c = 0x27904a0c;
     return pgm_hash == kDsrSkinnedVs032fd69c || pgm_hash == kDsrSkinnedVs27904a0c;
 }
 
+/// DIAGNOSTIC (Rush of Blood flashlight shadows): SHADPS4_FRESH_BUFFERS_HASH=<hex shader hash>
+/// (for example b08979d5) gives every read-only buffer of that shader a fresh snapshot of guest
+/// memory at each draw, instead of the buffer cache's copy. If a stale cached copy is what
+/// misplaces the flashlight shadows, they become correct with this switch.
+[[nodiscard]] inline bool ShouldIsolateFreshBuffer(u64 pgm_hash, bool is_written) {
+    static const u64 wanted = [] {
+        const char* value = std::getenv("SHADPS4_FRESH_BUFFERS_HASH");
+        if (value == nullptr || value[0] == 0) {
+            return u64{0};
+        }
+        return static_cast<u64>(std::strtoull(value, nullptr, 16));
+    }();
+    return wanted != 0 && pgm_hash == wanted && !is_written;
+}
+
 [[nodiscard]] inline bool ShouldIsolateReadConstBuffer([[maybe_unused]] u64 pgm_hash,
                                                        [[maybe_unused]] Shader::Stage stage,
                                                        [[maybe_unused]] bool used_as_readconst,
@@ -32,7 +48,8 @@ inline constexpr u64 kDsrSkinnedVs27904a0c = 0x27904a0c;
     // rcp-based integer-division emulation addressed in
     // docs/dsr-adreno830-vertex-explosion.md §6. Costs ~40 -> ~19 FPS while
     // enabled; disable again for play builds.
-    return ShouldIsolateReadConstSnapshot(pgm_hash, stage) && used_as_readconst && !is_written;
+    return (ShouldIsolateReadConstSnapshot(pgm_hash, stage) && used_as_readconst && !is_written) ||
+           ShouldIsolateFreshBuffer(pgm_hash, is_written);
 }
 
 /// Float32 sanity of the ReadConst guest window. NaN/Inf while the mesh explodes
