@@ -5,7 +5,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
+#include <unordered_map>
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/debug.h"
@@ -342,6 +344,62 @@ static void IndexVerifyScan(VAddr address, u32 count, u32 index_offset, bool gpu
     }
 }
 
+// SHADPS4_DBG_INDEX_REUPLOAD=1: diagnostic / fix candidate for the pig room streaks of Rush of
+// Blood. A capture showed the GPU reading position data from an index buffer whose guest memory
+// (checked with SHADPS4_DBG_INDEX_VERIFY) held proper indices: the GPU's copy was stale, because
+// the page tracking never marked those pages as changed. This copies the index range from the
+// guest's memory into the GPU buffer whenever its contents differ from the last time this range
+// was copied (or the GPU buffer is another one), whatever the tracking says.
+static bool IndexRangeNeedsUpload(VAddr address, u32 bytes, u64 buffer_id) {
+    struct Entry {
+        u32 bytes;
+        u64 buffer;
+        u64 hash;
+    };
+    static std::unordered_map<VAddr, Entry> seen;
+    static u64 uploads = 0;
+    static u64 skips = 0;
+    static u64 changed = 0;
+    const u8* const data = reinterpret_cast<const u8*>(address);
+    u64 hash = 0xcbf29ce484222325ull ^ bytes;
+    u32 i = 0;
+    for (; i + 8 <= bytes; i += 8) {
+        u64 word;
+        std::memcpy(&word, data + i, 8);
+        hash = (hash ^ word) * 0x100000001b3ull;
+        hash ^= hash >> 29;
+    }
+    for (; i < bytes; ++i) {
+        hash = (hash ^ data[i]) * 0x100000001b3ull;
+    }
+    bool need = true;
+    const auto it = seen.find(address);
+    if (it != seen.end()) {
+        const Entry& old = it->second;
+        if (old.bytes == bytes && old.buffer == buffer_id && old.hash == hash) {
+            need = false;
+        } else if (old.bytes == bytes && old.hash != hash) {
+            ++changed;
+        }
+    }
+    if (need) {
+        if (seen.size() > 200000) {
+            seen.clear();
+        }
+        seen[address] = Entry{bytes, buffer_id, hash};
+        ++uploads;
+    } else {
+        ++skips;
+    }
+    if (((uploads + skips) % 20000) == 0) {
+        LOG_WARNING(Render_Vulkan,
+                    "INDEXREUPLOAD: {} index ranges copied ({} of them changed since last seen), {} "
+                    "unchanged and skipped",
+                    uploads, changed, skips);
+    }
+    return need;
+}
+
 void BufferCache::BindIndexBuffer(u32 index_offset) {
     const auto& regs = liverpool->regs;
 
@@ -361,6 +419,15 @@ void BufferCache::BindIndexBuffer(u32 index_offset) {
                         IsRegionGpuModified(index_address, index_buffer_size));
     }
     const auto [vk_buffer, offset] = ObtainBuffer(index_address, index_buffer_size, false);
+    static const bool index_reupload = std::getenv("SHADPS4_DBG_INDEX_REUPLOAD") != nullptr;
+    if (index_reupload && index_buffer_size != 0 &&
+        vk_buffer->IsInBounds(index_address, index_buffer_size) &&
+        Core::Memory::Instance()->IsValidMapping(index_address, index_buffer_size) &&
+        IndexRangeNeedsUpload(index_address, index_buffer_size,
+                              reinterpret_cast<uintptr_t>(static_cast<VkBuffer>(vk_buffer->Handle())))) {
+        WriteDataBuffer(*vk_buffer, index_address, reinterpret_cast<const void*>(index_address),
+                        index_buffer_size);
+    }
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindIndexBuffer(vk_buffer->Handle(), offset, index_type);
 }
