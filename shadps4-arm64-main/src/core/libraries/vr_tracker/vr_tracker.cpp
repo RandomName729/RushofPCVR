@@ -19,10 +19,12 @@
 #include "core/libraries/error_codes.h"
 #include "core/libraries/kernel/time.h"
 #include "core/libraries/libs.h"
+#include "core/libraries/move/move.h"
 #include "core/libraries/vr_tracker/vr_tracker.h"
 #include "core/known_title.h"
 #include "core/libraries/vr_tracker/vr_tracker_error.h"
 #include "core/memory.h"
+#include "core/vr/quest_move.h"
 #include "core/vr/vr_runtime.h"
 #include "video_core/amdgpu/liverpool.h"
 
@@ -51,6 +53,28 @@ static std::mutex g_pads_mutex;
 static s32 g_move_handle = -1;
 static s32 g_gun_handle = -1;
 static s32 g_hmd_handle = -1;
+// Quest controllers as Move wands: the wand handles that are driven by the headset's
+// controllers. The game registers up to two per player; guarded by g_pads_mutex.
+static std::vector<s32> g_quest_wands;
+
+/// The hand (0 = right, 1 = left) a registered wand handle is, -1 if it is not a Quest wand.
+static int QuestWandHand(s32 handle) {
+    if (!Core::Vr::QuestMove::Enabled()) {
+        return -1;
+    }
+    {
+        std::scoped_lock lock{g_pads_mutex};
+        if (std::find(g_quest_wands.begin(), g_quest_wands.end(), handle) == g_quest_wands.end()) {
+            return -1;
+        }
+    }
+    return Libraries::Move::QuestHandOfHandle(handle);
+}
+
+static bool AnyQuestWand() {
+    std::scoped_lock lock{g_pads_mutex};
+    return !g_quest_wands.empty();
+}
 
 /// The registration of a DualShock 4 handle, if it is one.
 static std::optional<PadRegistration> FindPad(s32 handle) {
@@ -379,6 +403,16 @@ s32 PS4_SYSV_ABI sceVrTrackerRegisterDeviceInternal(const OrbisVrTrackerDeviceTy
         break;
     }
     case OrbisVrTrackerDeviceType::ORBIS_VR_TRACKER_DEVICE_MOVE: {
+        if (Core::Vr::QuestMove::Enabled() && Libraries::Move::QuestHandOfHandle(handle) >= 0) {
+            std::scoped_lock lock{g_pads_mutex};
+            if (std::find(g_quest_wands.begin(), g_quest_wands.end(), handle) !=
+                g_quest_wands.end()) {
+                return ORBIS_VR_TRACKER_ERROR_DEVICE_ALREADY_REGISTERED;
+            }
+            g_quest_wands.push_back(handle);
+            LOG_INFO(Lib_VrTracker, "Move wand {:#x} is tracked by a Quest controller", handle);
+            break;
+        }
         if (g_move_handle != -1) {
             return ORBIS_VR_TRACKER_ERROR_DEVICE_ALREADY_REGISTERED;
         }
@@ -431,7 +465,9 @@ s32 PS4_SYSV_ABI sceVrTrackerGetResult(const OrbisVrTrackerGetResultParam* param
     const auto pad_registration = FindPad(handle);
     // (Another player's controller is registered, but nothing tracks it.)
     const bool is_pad = pad_registration.has_value() && IsPlayersPad(handle);
-    if (!is_hmd && !pad_registration && handle != g_move_handle && handle != g_gun_handle) {
+    const int quest_hand = QuestWandHand(handle);
+    if (!is_hmd && !pad_registration && quest_hand < 0 && handle != g_move_handle &&
+        handle != g_gun_handle) {
         return ORBIS_VR_TRACKER_ERROR_DEVICE_NOT_REGISTERED;
     }
 
@@ -439,6 +475,36 @@ s32 PS4_SYSV_ABI sceVrTrackerGetResult(const OrbisVrTrackerGetResultParam* param
     result->handle = handle;
     result->user_frame_number = param->user_frame_number;
     result->camera_orientation_w = 1.0f;
+
+    if (quest_hand >= 0) {
+        // a Move wand, placed where the Quest controller is.
+        const auto wand = Core::Vr::QuestMove::Hub::Instance().Get(quest_hand);
+        const u64 stamp = Libraries::Kernel::sceKernelGetProcessTime();
+        result->connected = wand.connected ? 1 : 0;
+        result->timestamp = param->prediction_time != 0 ? param->prediction_time : stamp;
+        result->device_timestamp = stamp;
+        result->recalibrate_necessity =
+            OrbisVrTrackerRecalibrateNecessityType::ORBIS_VR_TRACKER_RECALIBRATE_NECESSITY_NOTHING;
+        result->playarea_brightness_risk =
+            OrbisVrTrackerPlayareaBrightnessRiskType::ORBIS_VR_TRACKER_PLAYAREA_BRIGHTNESS_RISK_LOW;
+        result->led_color = quest_hand == 0 ? OrbisVrTrackerLedColor::ORBIS_VR_TRACKER_LED_COLOR_MAGENTA
+                                            : OrbisVrTrackerLedColor::ORBIS_VR_TRACKER_LED_COLOR_CYAN;
+        if (!HeadsetConnected() || !wand.connected || !wand.tracked) {
+            result->status = OrbisVrTrackerStatus::ORBIS_VR_TRACKER_STATUS_NOT_TRACKING;
+            return ORBIS_OK;
+        }
+        result->status = OrbisVrTrackerStatus::ORBIS_VR_TRACKER_STATUS_TRACKING;
+        result->position_quality = OrbisVrTrackerQuality::ORBIS_VR_TRACKER_QUALITY_FULL;
+        result->orientation_quality = OrbisVrTrackerQuality::ORBIS_VR_TRACKER_QUALITY_FULL;
+        result->velocity_x = wand.linear_velocity.x;
+        result->velocity_y = wand.linear_velocity.y;
+        result->velocity_z = wand.linear_velocity.z;
+        result->angular_velocity_x = wand.angular_velocity.x;
+        result->angular_velocity_y = wand.angular_velocity.y;
+        result->angular_velocity_z = wand.angular_velocity.z;
+        WritePose(result->move_info.device_pose, wand.pose);
+        return ORBIS_OK;
+    }
 
     // Only the headset and the first controller are tracked by the host.
     if (!HeadsetConnected() || (!is_hmd && !is_pad)) {
@@ -643,7 +709,7 @@ s32 PS4_SYSV_ABI sceVrTrackerRecalibrate(const OrbisVrTrackerRecalibrateParam* p
         break;
     }
     case OrbisVrTrackerDeviceType::ORBIS_VR_TRACKER_DEVICE_MOVE: {
-        if (g_move_handle == -1) {
+        if (g_move_handle == -1 && !AnyQuestWand()) {
             return ORBIS_VR_TRACKER_ERROR_DEVICE_NOT_REGISTERED;
         }
         break;
@@ -809,6 +875,8 @@ s32 PS4_SYSV_ABI sceVrTrackerUnregisterDevice(const s32 handle) {
         // (The next registered, if any, is the player's from now on.)
         std::scoped_lock lock{g_pads_mutex};
         std::erase_if(g_pads, [&](const PadRegistration& pad) { return pad.handle == handle; });
+    } else if (std::scoped_lock lock{g_pads_mutex}; std::erase(g_quest_wands, handle) > 0) {
+        // (A Quest-driven Move wand.)
     } else if (handle == g_move_handle) {
         g_move_handle = -1;
     } else if (handle == g_gun_handle) {

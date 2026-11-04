@@ -3,6 +3,16 @@
 All notable changes to RushVR, newest first. RushVR is shadPS4 plus a VR layer and the fixes that
 let Until Dawn: Rush of Blood run under emulation.
 
+## 0.5.0 - 2026-11-03
+
+- **One free edition.** The Quest controllers playing as the game's two PlayStation Move wands,
+  until now the paid Motion edition, are part of RushVR for everyone: no licence file, no separate
+  download. Switch them on in the start-up window's "Controllers" card (`controllers=quest` in
+  `settings.txt`); the DualSense stays the default. The card's sliders (`move_pitch`, `move_reach`,
+  `move_turn`) set the aim angle, reach and turning. The Move code is in the public source
+  (`src/core/vr/quest_move.h` and the Move and VR tracker libraries).
+- The banner no longer says FREE or MOTION.
+
 ## 0.4.5 - 2026-11-02
 
 - **Level 2 (the pig room): the long black streaks are fixed.** Some of the level's index data

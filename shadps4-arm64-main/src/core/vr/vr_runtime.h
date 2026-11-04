@@ -219,6 +219,10 @@ public:
     DeviceState GetHead();
     DeviceState GetPad();
 
+    /// Quest controllers as Move wands: a device sample in host space, seen from the
+    /// player's seat, in tracker space. The same arithmetic UpdatePad does, without keeping it.
+    DeviceState ToTrackerSpace(const DeviceState& host_state) const;
+
     /// Converts a tracker-space pose handed back by the guest into host space.
     Pose ToHostSpace(const Pose& tracker_pose) const;
 

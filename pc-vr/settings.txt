@@ -133,18 +133,17 @@
 #game=C:\path\to\CUSA03683\eboot.bin
 
 # Which controllers play the game: dualsense (the default), or quest (the Quest controllers play
-# as the game's two PlayStation Move wands). Quest is for the Motion edition only: it needs that
-# edition's emulator, and the window greys the choice out without it. (The window sets it.)
+# as the game's two PlayStation Move wands; unplug the DualSense then). The window sets it.
 #controllers=dualsense
 
-# The Motion edition's Quest controllers, set by three sliders in the window: move_pitch, how
-# far the in-game guns are raised above the way the controller points, in degrees (0 to 90);
-# move_reach, how far the in-game hands move when yours do, in percent of your own movement (5 to
-# 130); and move_turn, how far the guns turn when you turn your wrist, in percent (5 to 130).
-# Ignored without the Motion edition.
+# The Quest controllers' feel, set by three sliders in the window: move_pitch, how far the
+# in-game guns are raised above the way the controller points, in degrees (0 to 90); move_reach,
+# how far the in-game hands move when yours do, in percent of your own movement (5 to 130); and
+# move_turn, how far the guns turn when you turn your wrist, in percent (5 to 130). Used only
+# with controllers=quest.
 #move_pitch=35
-#move_reach=35
-#move_turn=42
+#move_reach=55
+#move_turn=65
 
 # Extra environment variables for the emulator, as many lines as needed.
 #env=NAME=value

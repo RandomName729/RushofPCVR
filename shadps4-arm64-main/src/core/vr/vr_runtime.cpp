@@ -871,6 +871,16 @@ DeviceState Runtime::GetPad() {
     return state;
 }
 
+DeviceState Runtime::ToTrackerSpace(const DeviceState& host_state) const {
+    std::scoped_lock lock{mutex};
+    DeviceState out = host_state;
+    out.pose.position = PositionToTracker(host_state.pose.position);
+    out.pose.orientation = Normalize(Multiply(Conjugate(seat_yaw), host_state.pose.orientation));
+    out.linear_velocity = DirectionToTracker(host_state.linear_velocity);
+    out.angular_velocity = DirectionToTracker(host_state.angular_velocity);
+    return out;
+}
+
 Pose Runtime::ToHostSpace(const Pose& tracker_pose) const {
     std::scoped_lock lock{mutex};
     const auto from_seat = [&](const Vec3& position, const Quat& yaw) {

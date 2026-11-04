@@ -43,5 +43,9 @@ struct OrbisMoveData {
     float temperature;
 };
 
+/// Quest controllers as Move wands (SHADPS4_QUEST_MOVE=1): the hand a wand handle
+/// stands for, 0 = right, 1 = left, -1 when the handle is not a Quest-driven wand.
+int QuestHandOfHandle(s32 handle);
+
 void RegisterLib(Core::Loader::SymbolsResolver* sym);
 } // namespace Libraries::Move

@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <string>
 #include <thread>
 
 #include <windows.h>
@@ -26,6 +27,7 @@
 #include "common/singleton.h"
 #include "common/thread.h"
 #include "core/vr/openxr_host.h"
+#include "core/vr/quest_move.h"
 #include "input/controller.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
@@ -355,6 +357,42 @@ struct OpenXrHost::Impl {
     XrSpace grip_spaces[2]{XR_NULL_HANDLE, XR_NULL_HANDLE};
     bool actions_ready{};
     bool actions_synced{};
+
+    // the headset's controllers as Move wands (QuestMove::Enabled()).
+    XrAction act_trigger{XR_NULL_HANDLE};
+    XrAction act_squeeze{XR_NULL_HANDLE};
+    XrAction act_lower{XR_NULL_HANDLE};       // A (right) / X (left)
+    XrAction act_upper{XR_NULL_HANDLE};       // B (right) / Y (left)
+    XrAction act_stick{XR_NULL_HANDLE};       // thumbstick, 2D
+    XrAction act_stick_click{XR_NULL_HANDLE};
+    XrAction act_menu{XR_NULL_HANDLE};        // left controller only
+    XrAction act_haptic{XR_NULL_HANDLE};
+    bool quest_actions{};
+    bool quest_trigger_down[2]{};
+    bool quest_squeeze_down[2]{};
+    bool quest_wand_seen[2]{};
+    u8 quest_rumble_sent[2]{};
+    bool quest_menu_down{};
+    bool quest_menu_fired{};
+    Clock::time_point quest_menu_since{};
+    Quat quest_rotation{};     // the wand's turn against the controller's grip
+    XrVector3f quest_sphere{}; // where the glowing sphere is, in the wand's own frame
+    // How much of the controller's real motion the game gets: its reach from the head, and its
+    // turn from "level, facing where the head faces". 1 is the real thing.
+    float quest_scale{0.55f};
+    float quest_turn{0.65f};
+    // The point the reach is scaled from, and the heading the turn is scaled from: where the head
+    // sits and faces, but followed slowly (quest_follow = seconds). Taken from the head as it is
+    // right now, a head that moves or turns while the hands stay put drags them along with
+    // (1 - reach) of its move and (1 - turn) of its turn.
+    float quest_follow{3.0f};
+    XrVector3f quest_anchor{};
+    Quat quest_anchor_yaw{0.0f, 0.0f, 0.0f, 1.0f};
+    bool quest_anchor_set{};
+    XrTime quest_anchor_time{};
+    // A Touch controller's grip points down the handle, which is tilted down from where the
+    // player points it; this tilts the wand up by that much (degrees, about the grip's X axis).
+    Quat quest_aim_tilt{};
     XrVector3f grip_rest{};
     Clock::time_point grip_moved{};
     // What the gamepad is placed by: 0 nothing, 1 the joints of the hands, 2 the above.
@@ -686,7 +724,7 @@ struct OpenXrHost::Impl {
         if (has_hand_tracking) {
             CreateHandTrackers();
         }
-        if (use_grips) {
+        if (use_grips || QuestMove::Enabled()) {
             CreateActions();
         }
         if (has_refresh_rate) {
@@ -766,6 +804,9 @@ struct OpenXrHost::Impl {
         };
         bind(act_grip, "/user/hand/left/input/grip/pose");
         bind(act_grip, "/user/hand/right/input/grip/pose");
+        if (QuestMove::Enabled()) {
+            CreateQuestMoveActions(bind);
+        }
         XrInteractionProfileSuggestedBinding suggested{
             XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
         xrStringToPath(instance, "/interaction_profiles/oculus/touch_controller",
@@ -798,6 +839,330 @@ struct OpenXrHost::Impl {
             }
         }
         actions_ready = true;
+    }
+
+    /// the inputs of the headset's controllers that stand in for Move wands.
+    template <typename Bind>
+    void CreateQuestMoveActions(Bind&& bind) {
+        const auto make = [&](XrAction& action, const char* name, XrActionType type,
+                              bool both_hands) {
+            XrActionCreateInfo info{XR_TYPE_ACTION_CREATE_INFO};
+            std::strcpy(info.actionName, name);
+            std::strcpy(info.localizedActionName, name);
+            info.actionType = type;
+            info.countSubactionPaths = 2;
+            info.subactionPaths = hand_paths;
+            (void)both_hands;
+            return XR_SUCCEEDED(xrCreateAction(action_set, &info, &action));
+        };
+        bool ok = true;
+        ok &= make(act_trigger, "wand-trigger", XR_ACTION_TYPE_FLOAT_INPUT, true);
+        ok &= make(act_squeeze, "wand-squeeze", XR_ACTION_TYPE_FLOAT_INPUT, true);
+        ok &= make(act_lower, "wand-lower", XR_ACTION_TYPE_BOOLEAN_INPUT, true);
+        ok &= make(act_upper, "wand-upper", XR_ACTION_TYPE_BOOLEAN_INPUT, true);
+        ok &= make(act_stick, "wand-stick", XR_ACTION_TYPE_VECTOR2F_INPUT, true);
+        ok &= make(act_stick_click, "wand-stick-click", XR_ACTION_TYPE_BOOLEAN_INPUT, true);
+        ok &= make(act_menu, "wand-menu", XR_ACTION_TYPE_BOOLEAN_INPUT, true);
+        ok &= make(act_haptic, "wand-rumble", XR_ACTION_TYPE_VIBRATION_OUTPUT, true);
+        if (!ok) {
+            LOG_WARNING(Core_Vr, "Quest controllers as Move wands: their inputs could not be "
+                                 "asked for");
+            return;
+        }
+        for (const char* hand : {"left", "right"}) {
+            const std::string base = std::string{"/user/hand/"} + hand;
+            bind(act_trigger, (base + "/input/trigger/value").c_str());
+            bind(act_squeeze, (base + "/input/squeeze/value").c_str());
+            bind(act_stick, (base + "/input/thumbstick").c_str());
+            bind(act_stick_click, (base + "/input/thumbstick/click").c_str());
+            bind(act_haptic, (base + "/output/haptic").c_str());
+        }
+        bind(act_lower, "/user/hand/left/input/x/click");
+        bind(act_upper, "/user/hand/left/input/y/click");
+        bind(act_lower, "/user/hand/right/input/a/click");
+        bind(act_upper, "/user/hand/right/input/b/click");
+        bind(act_menu, "/user/hand/left/input/menu/click");
+
+        // The wand against the controller. The game turns the tracker's Move orientation as
+        // (x, y, z, w) -> (x, -z, y, w) (see the notes in the kit) and a wand that was pointed
+        // straight ahead came out pointing straight DOWN with the earlier guess (+Y towards the
+        // sphere). So the wand's axes are the headset's own: -Z forward (towards the sphere),
+        // +Y up out of the face buttons, +X right: the same as a controller's grip. No turn.
+        // SHADPS4_QUEST_MOVE_ROT="p,y,r" (degrees: pitch about X, yaw about Y, roll about Z,
+        // applied on top) is for trying another turn without a rebuild.
+        quest_rotation = Quat{};
+        if (const char* text = std::getenv("SHADPS4_QUEST_MOVE_ROT"); text != nullptr) {
+            float pitch = 0.0f, yaw = 0.0f, roll = 0.0f;
+            if (std::sscanf(text, "%f,%f,%f", &pitch, &yaw, &roll) == 3) {
+                const float to_rad = 0.017453292f;
+                quest_rotation = Normalize(Multiply(
+                    quest_rotation,
+                    FromYawPitchRoll(yaw * to_rad, pitch * to_rad, roll * to_rad)));
+            }
+        }
+        // The sphere sits at the end of the wand, about 12 cm in front of the hand (forward is
+        // -Z of the wand).
+        quest_sphere = {0.0f, 0.0f, -0.12f};
+        if (const char* text = std::getenv("SHADPS4_QUEST_MOVE_SPHERE"); text != nullptr) {
+            float x = 0.0f, y = 0.0f, z = 0.0f;
+            if (std::sscanf(text, "%f,%f,%f", &x, &y, &z) == 3) {
+                quest_sphere = {x, y, z};
+            }
+        }
+        // (SHADPS4_QUEST_MOVE_SCALE / SHADPS4_QUEST_MOVE_TURN: 1 = as real, lower = the in-game
+        // hand moves and turns less than the real one.)
+        {
+            // SHADPS4_QUEST_MOVE_PITCH: degrees, positive raises the muzzle. 0 = the grip as is.
+            const float pitch = std::clamp(EnvFloat("SHADPS4_QUEST_MOVE_PITCH", 35.0f), -90.0f, 90.0f);
+            const float half = pitch * 0.017453292f * 0.5f;
+            quest_aim_tilt = Quat{std::sin(half), 0.0f, 0.0f, std::cos(half)};
+            LOG_INFO(Core_Vr, "Quest controllers as Move wands: muzzle raised by {:.0f} degrees",
+                     pitch);
+        }
+        quest_scale = std::clamp(EnvFloat("SHADPS4_QUEST_MOVE_SCALE", quest_scale), 0.05f, 3.0f);
+        quest_turn = std::clamp(EnvFloat("SHADPS4_QUEST_MOVE_TURN", quest_turn), 0.05f, 3.0f);
+        // SHADPS4_QUEST_MOVE_FOLLOW: seconds the reach and turn anchor takes to follow the head
+        // (0 = the head itself: the hands then move with the head).
+        quest_follow = std::clamp(EnvFloat("SHADPS4_QUEST_MOVE_FOLLOW", quest_follow), 0.0f, 120.0f);
+        LOG_INFO(Core_Vr, "Quest controllers as Move wands: reach x{:.2f}, turn x{:.2f}",
+                 quest_scale, quest_turn);
+        quest_actions = true;
+    }
+
+    /// reads the headset's controllers, and hands the game what they do as the Move
+    /// wands' buttons, trigger and place; plays the wands' rumble on them.
+    void UpdateQuestMove(XrTime time) {
+        if (!quest_actions) {
+            return;
+        }
+        auto& hub = QuestMove::Hub::Instance();
+        auto& runtime = Runtime::Instance();
+
+        const auto get_info = [&](XrAction action, int xr_hand) {
+            XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};
+            get.action = action;
+            get.subactionPath = hand_paths[xr_hand];
+            return get;
+        };
+        const auto read_float = [&](XrAction action, int xr_hand) {
+            const XrActionStateGetInfo get = get_info(action, xr_hand);
+            XrActionStateFloat state{XR_TYPE_ACTION_STATE_FLOAT};
+            if (XR_SUCCEEDED(xrGetActionStateFloat(session, &get, &state)) &&
+                state.isActive == XR_TRUE) {
+                return state.currentState;
+            }
+            return 0.0f;
+        };
+        const auto read_bool = [&](XrAction action, int xr_hand) {
+            const XrActionStateGetInfo get = get_info(action, xr_hand);
+            XrActionStateBoolean state{XR_TYPE_ACTION_STATE_BOOLEAN};
+            return XR_SUCCEEDED(xrGetActionStateBoolean(session, &get, &state)) &&
+                   state.isActive == XR_TRUE && state.currentState == XR_TRUE;
+        };
+        const auto read_stick = [&](int xr_hand) {
+            const XrActionStateGetInfo get = get_info(act_stick, xr_hand);
+            XrActionStateVector2f state{XR_TYPE_ACTION_STATE_VECTOR2F};
+            if (XR_SUCCEEDED(xrGetActionStateVector2f(session, &get, &state)) &&
+                state.isActive == XR_TRUE) {
+                return state.currentState;
+            }
+            return XrVector2f{0.0f, 0.0f};
+        };
+
+        // The left controller's menu button starts, for both wands.
+        const bool menu = actions_synced && read_bool(act_menu, 0);
+        // Held for a second it also resets the view (where the player sits and faces), as
+        // OPTIONS does on the gamepad.
+        if (menu) {
+            const auto now = Clock::now();
+            if (!quest_menu_down) {
+                quest_menu_down = true;
+                quest_menu_fired = false;
+                quest_menu_since = now;
+            } else if (!quest_menu_fired && now - quest_menu_since > std::chrono::seconds{1}) {
+                quest_menu_fired = true;
+                LOG_INFO(Core_Vr, "Left menu button held: view reset");
+                runtime.RequestRecenter();
+                quest_anchor_set = false;
+            }
+        } else {
+            quest_menu_down = false;
+        }
+
+        // The anchor follows the head slowly (see quest_follow).
+        if (head_tracked_frames == 0) {
+            quest_anchor_set = false;
+        } else {
+            const Quat head_yaw = YawOnly(Normalize({head_pose.orientation.x, head_pose.orientation.y,
+                                                     head_pose.orientation.z,
+                                                     head_pose.orientation.w}));
+            if (!quest_anchor_set || quest_follow <= 0.0f) {
+                quest_anchor = head_pose.position;
+                quest_anchor_yaw = head_yaw;
+                quest_anchor_set = true;
+            } else {
+                const float seconds =
+                    std::clamp(static_cast<float>(time - quest_anchor_time) * 1.0e-9f, 0.0f, 1.0f);
+                const float alpha = 1.0f - std::exp(-seconds / quest_follow);
+                quest_anchor = {quest_anchor.x + (head_pose.position.x - quest_anchor.x) * alpha,
+                                quest_anchor.y + (head_pose.position.y - quest_anchor.y) * alpha,
+                                quest_anchor.z + (head_pose.position.z - quest_anchor.z) * alpha};
+                const Quat a = quest_anchor_yaw;
+                const float dot = a.x * head_yaw.x + a.y * head_yaw.y + a.z * head_yaw.z +
+                                  a.w * head_yaw.w;
+                const float side = dot < 0.0f ? -1.0f : 1.0f;
+                quest_anchor_yaw = Normalize({a.x + (side * head_yaw.x - a.x) * alpha,
+                                              a.y + (side * head_yaw.y - a.y) * alpha,
+                                              a.z + (side * head_yaw.z - a.z) * alpha,
+                                              a.w + (side * head_yaw.w - a.w) * alpha});
+            }
+            quest_anchor_time = time;
+        }
+
+        for (int wand_index = 0; wand_index < 2; ++wand_index) {
+            // Move index 0 is the right hand, 1 the left; the headset counts left first.
+            const int xr_hand = wand_index == 0 ? 1 : 0;
+            QuestMove::Wand wand = hub.Get(wand_index);
+            if (!actions_synced) {
+                // (The game does not have the player's attention.)
+                wand.tracked = false;
+                wand.buttons = 0;
+                wand.trigger = 0;
+                hub.Publish(wand_index, wand);
+                continue;
+            }
+            XrActionStatePose pose_state{XR_TYPE_ACTION_STATE_POSE};
+            const XrActionStateGetInfo pose_get = get_info(act_grip, xr_hand);
+            wand.connected = XR_SUCCEEDED(xrGetActionStatePose(session, &pose_get, &pose_state)) &&
+                             pose_state.isActive == XR_TRUE;
+            if (wand.connected != quest_wand_seen[wand_index]) {
+                quest_wand_seen[wand_index] = wand.connected;
+                LOG_INFO(Core_Vr, "Quest controller of the {} hand (Move wand {}): {}",
+                         xr_hand == 1 ? "right" : "left", wand_index,
+                         wand.connected ? "active" : "not active");
+            }
+
+            // Buttons: a fixed layout (see the "Controllers" notes in the README).
+            const float trigger = read_float(act_trigger, xr_hand);
+            const float squeeze = read_float(act_squeeze, xr_hand);
+            const XrVector2f stick = read_stick(xr_hand);
+            // Presses with some slack, so a trigger held half way does not flicker.
+            bool& trigger_down = quest_trigger_down[wand_index];
+            trigger_down = trigger_down ? trigger > 0.35f : trigger > 0.6f;
+            bool& squeeze_down = quest_squeeze_down[wand_index];
+            squeeze_down = squeeze_down ? squeeze > 0.4f : squeeze > 0.65f;
+            u16 buttons = 0;
+            if (trigger_down) {
+                buttons |= QuestMove::T;
+            }
+            if (squeeze_down) {
+                buttons |= QuestMove::MOVE;
+            }
+            if (read_bool(act_lower, xr_hand)) {
+                buttons |= QuestMove::CROSS;
+            }
+            if (read_bool(act_upper, xr_hand)) {
+                buttons |= QuestMove::CIRCLE;
+            }
+            if (read_bool(act_stick_click, xr_hand)) {
+                buttons |= QuestMove::SQUARE;
+            }
+            if (stick.y > 0.7f) {
+                buttons |= QuestMove::TRIANGLE;
+            }
+            if (stick.y < -0.7f) {
+                buttons |= QuestMove::SELECT;
+            }
+            if (menu) {
+                buttons |= QuestMove::START;
+            }
+            wand.buttons = buttons;
+            wand.trigger = static_cast<u8>(std::clamp(trigger, 0.0f, 1.0f) * 255.0f + 0.5f);
+
+            // Place: where the controller's grip is, then the wand's own turn and its sphere.
+            wand.tracked = false;
+            if (grip_spaces[xr_hand] != XR_NULL_HANDLE && wand.connected) {
+                XrSpaceVelocity velocity{XR_TYPE_SPACE_VELOCITY};
+                XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+                location.next = &velocity;
+                static constexpr XrSpaceLocationFlags Needed =
+                    XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+                if (XR_SUCCEEDED(xrLocateSpace(grip_spaces[xr_hand], local_space, time,
+                                               &location)) &&
+                    (location.locationFlags & Needed) == Needed) {
+                    DeviceState host;
+                    Quat grip = Normalize({location.pose.orientation.x,
+                                           location.pose.orientation.y,
+                                           location.pose.orientation.z,
+                                           location.pose.orientation.w});
+                    // The grip, tilted up to where the player really points the controller.
+                    grip = Normalize(Multiply(grip, quest_aim_tilt));
+                    XrVector3f at = location.pose.position;
+                    const bool head_known = head_tracked_frames != 0 && quest_anchor_set;
+                    if (head_known && quest_turn != 1.0f) {
+                        // The turn is scaled from the rest pose: level, facing where the head
+                        // faces (a normalised blend of the two, good enough for the small
+                        // angles of a wrist).
+                        const Quat rest = quest_anchor_yaw;
+                        const float dot = rest.x * grip.x + rest.y * grip.y + rest.z * grip.z +
+                                          rest.w * grip.w;
+                        const float side = dot < 0.0f ? -1.0f : 1.0f;
+                        const float t = quest_turn;
+                        grip = Normalize({rest.x * (1.0f - t) + side * grip.x * t,
+                                          rest.y * (1.0f - t) + side * grip.y * t,
+                                          rest.z * (1.0f - t) + side * grip.z * t,
+                                          rest.w * (1.0f - t) + side * grip.w * t});
+                    }
+                    if (head_known && quest_scale != 1.0f) {
+                        // The reach is scaled from where the head has been sitting (not from the
+                        // head as it is, which would carry the hands along when it moves).
+                        at = {quest_anchor.x + (at.x - quest_anchor.x) * quest_scale,
+                              quest_anchor.y + (at.y - quest_anchor.y) * quest_scale,
+                              quest_anchor.z + (at.z - quest_anchor.z) * quest_scale};
+                    }
+                    host.pose.orientation = Normalize(Multiply(grip, quest_rotation));
+                    const Vec3 sphere = Rotate(host.pose.orientation,
+                                               {quest_sphere.x, quest_sphere.y, quest_sphere.z});
+                    host.pose.position = {at.x + sphere.x, at.y + sphere.y, at.z + sphere.z};
+                    if ((velocity.velocityFlags & XR_SPACE_VELOCITY_LINEAR_VALID_BIT) != 0) {
+                        host.linear_velocity = {velocity.linearVelocity.x * quest_scale,
+                                                velocity.linearVelocity.y * quest_scale,
+                                                velocity.linearVelocity.z * quest_scale};
+                    }
+                    if ((velocity.velocityFlags & XR_SPACE_VELOCITY_ANGULAR_VALID_BIT) != 0) {
+                        host.angular_velocity = {velocity.angularVelocity.x * quest_turn,
+                                                 velocity.angularVelocity.y * quest_turn,
+                                                 velocity.angularVelocity.z * quest_turn};
+                    }
+                    host.tracked = true;
+                    const DeviceState placed = runtime.ToTrackerSpace(host);
+                    wand.pose = placed.pose;
+                    wand.linear_velocity = placed.linear_velocity;
+                    wand.angular_velocity = placed.angular_velocity;
+                    wand.tracked = true;
+                }
+            }
+            hub.Publish(wand_index, wand);
+
+            // The game's rumble request, played on the controller.
+            if (act_haptic != XR_NULL_HANDLE) {
+                const u8 want = wand.connected ? hub.GetRumble(wand_index) : 0;
+                XrHapticActionInfo haptic{XR_TYPE_HAPTIC_ACTION_INFO};
+                haptic.action = act_haptic;
+                haptic.subactionPath = hand_paths[xr_hand];
+                if (want != 0) {
+                    XrHapticVibration vibration{XR_TYPE_HAPTIC_VIBRATION};
+                    vibration.duration = XR_MIN_HAPTIC_DURATION;
+                    vibration.frequency = XR_FREQUENCY_UNSPECIFIED;
+                    vibration.amplitude = static_cast<float>(want) / 255.0f;
+                    xrApplyHapticFeedback(session, &haptic,
+                                          reinterpret_cast<const XrHapticBaseHeader*>(&vibration));
+                } else if (quest_rumble_sent[wand_index] != 0) {
+                    xrStopHapticFeedback(session, &haptic);
+                }
+                quest_rumble_sent[wand_index] = want;
+            }
+        }
     }
 
     /// Has the runtime bring up to date where its controllers are.
@@ -1176,6 +1541,7 @@ struct OpenXrHost::Impl {
                 static_cast<XrTime>(std::clamp(predict_ms, 0.0f, 80.0f) * 1e6f);
             UpdateHead(pose_time);
             SyncActions();
+            UpdateQuestMove(pose_time);
             UpdatePad(pose_time);
 
             if (const s32 index = TakeFrame(); index >= 0) {

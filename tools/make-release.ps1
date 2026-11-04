@@ -29,11 +29,6 @@ function Need([string]$path, [string]$what) {
     if (-not (Test-Path -LiteralPath $path)) { throw "Missing ${what}: $path" }
 }
 Need $Exe "emulator (build it first, see the top of this script)"
-# The free emulator must not have the Motion (paid) Quest/Move code in it: the build folder holds
-# the paid exe after a paid build. Build from main again, or pass the free exe with -Exe.
-if ([Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($Exe)).Contains("SHADPS4_QUEST_MOVE")) {
-    throw "$Exe has the paid Quest/Move code in it (it was built on the paid-build branch). Build the free emulator from main: git checkout main, then cmake --build shadps4-arm64-main\Build\x64-Clang-Release --target shadps4 (or give the free exe with -Exe)."
-}
 foreach ($name in "PkgTool.exe", "LibOrbisPkg.dll", "LICENSE.txt") {
     Need (Join-Path $PkgToolDir $name) "PkgTool file (see the top of this script)"
 }
@@ -145,23 +140,23 @@ through Virtual Desktop.
    45 and at 80 use 40 with the "Aim for" choice in the start-up window.)
    (SteamVR can be used instead: pick it under "Headset connection" in the start-up window,
    with the headset connected to SteamVR first. It has been tested through level 4.)
-3. Connect the DualSense to this PC (USB cable, or Bluetooth paired with the PC, not with the
-   headset). The headset's own controllers do not play the game in this edition (the "Controllers"
-   card in the start-up window, greyed out here, is for the separate Motion edition).
+3. Controllers: connect the DualSense to this PC (USB cable, or Bluetooth paired with the PC, not
+   with the headset), or choose "Quest controllers as Move wands" in the "Controllers" card of
+   the start-up window to play with the headset's own controllers (unplug the DualSense then:
+   while one is connected the game uses it and ignores the Quest controllers).
 4. Connect Virtual Desktop to this PC, then start "Play Rush of Blood.bat". (If the
    Microsoft Visual C++ runtime is missing, it says so and offers Microsoft's download.)
-5. In the game's own start-up question, choose the DualShock controller, not the Move
-   controllers (they are not supported).
+5. In the game's own start-up question, choose the DualShock controller if you play with the
+   DualSense, or the Move controllers if you play with the Quest controllers.
 
-What is new in $Version (the whole list is in CHANGELOG.md): no more long streaks of colour in
-level 2 (the game's files with very long names can be opened now), a new start-up window with Low,
-Medium and High buttons and a choice of what the monitor shows, and higher default quality. From
-0.4.0: large picture sizes (eye_width 2688 and
+What is new in $Version (the whole list is in CHANGELOG.md): the Quest controllers playing as
+the game's Move wands are now part of the free release (no licence needed). From 0.4.5: the pig room's streaks and the flashlight's shadows are
+fixed. From 0.4.2: a new start-up window with Low, Medium and High buttons and a choice of what
+the monitor shows, and higher default quality. From 0.4.0: large picture sizes (eye_width 2688 and
 2880) no longer run the PC out of memory (give Windows a big page file, see the README), a
 Sharpening choice, tighter Black corners choices, and a field of view of 105 by default. From 0.3.6:
 a new, darker start-up window (its own title bar with minimize, a status line along the bottom).
-From 0.3.5: one start file; a "Controllers"
-card for the Motion edition (greyed out in this one). From 0.3.0: the game runs at the
+From 0.3.5: one start file. From 0.3.0: the game runs at the
 speed it was made for, with the captions in step with the voice, at 50 to 60 frames a second with a
 steady "Aim for" rate; the garbled textures are gone; textures are sharper; FXAA is back.
 

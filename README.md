@@ -7,7 +7,7 @@
 Play the PlayStation VR game on a **Meta Quest 3** through Virtual Desktop (or any OpenXR headset),
 from your own copy of the game, through a PS4 emulator.
 
-[![Version](https://img.shields.io/badge/version-0.4.5-2f81f7?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.0-2f81f7?style=flat-square)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-GPL--2.0--or--later-3fb950?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-8957e5?style=flat-square)](#requirements)
 [![Headset](https://img.shields.io/badge/headset-Quest%203%20%C2%B7%20OpenXR-f0883e?style=flat-square)](#requirements)
@@ -41,12 +41,12 @@ depth buffers, its timing and resolution).
 | **Start-up window** | Low / Medium / High picture buttons, field of view, sharpness, edge smoothing, frame rate, and what the monitor shows. |
 | **Sharper than the console** | The game can draw up to 2880 x 3240 pixels an eye (the console draws 1152 x 1296). |
 | **Made for Virtual Desktop** | Held to 60 fps against a 120 Hz stream, with the console's own speed kept so captions stay with the voice. SteamVR works too. |
-| **DualSense controls** | Buttons, sticks, touchpad and motion sensors. The Motion edition plays with the Quest controllers as PlayStation Move wands. |
+| **Your choice of controllers** | The **DualSense** (buttons, sticks, touchpad, motion sensors), or your **Quest controllers** playing as the game's two PlayStation Move wands, with reach, aim angle and turning sliders. |
 
 ## Status
 
 > [!NOTE]
-> **Early work in progress, version 0.4.5**, built and tested by one person on one PC and one
+> **Early work in progress, version 0.5.0**, built and tested by one person on one PC and one
 > Quest 3. Expect rough edges, and please report what you find
 > ([Troubleshooting](#troubleshooting)).
 
@@ -63,17 +63,20 @@ median of about 50 fps in level 1, mostly between 43 and 60.
   [Slow or stuttering](#troubleshooting) for how to help find the cause.
 - The player's arms can look dark in the intro.
 - The game sometimes stops after level 1.
+- The Quest controller support has been tried by one person on one Quest 3.
 
-The free edition is played with the **DualSense**; the headset's own controllers do not play the
-game. The start-up window has a greyed-out "Controllers" card, which comes with the separate Motion
-edition.
+**Controllers:** the start-up window has a "Controllers" card. By default the game is played with the
+**DualSense**. Switch on **Quest controllers as Move wands** to play with the headset's own controllers
+instead: unplug the DualSense first (while one is connected the game uses it and ignores the Quest
+controllers), and in the game's own start-up question choose the Move controllers. The card's three
+sliders set how high the guns are aimed, how far your hands reach and how far the guns turn.
 
 ## Requirements
 
 | You need | Details |
 | --- | --- |
 | **Headset** | A **Meta Quest 3** with [Virtual Desktop](https://www.vrdesktop.net/) (the app on the headset and the Streamer on the PC). Other OpenXR headsets may work; nobody has tried. |
-| **Controller** | A **PS5 DualSense** connected to the PC itself (USB, or Bluetooth paired with the PC, not the headset: paired with the headset it reaches the PC without motion sensors and touchpad). |
+| **Controllers** | A **PS5 DualSense** connected to the PC itself (USB, or Bluetooth paired with the PC, not the headset: paired with the headset it reaches the PC without motion sensors and touchpad), **or** just the Quest controllers (see Status). |
 | **Game** | *Until Dawn: Rush of Blood*, US release **CUSA03683, version 1.00**, dumped from your own console and game: the game's folder (the one with `eboot.bin`, `sce_sys` and `sce_module`) or the `.pkg` made from the dump. A package downloaded from the PlayStation Store is encrypted and cannot be used. The European release (CUSA02350 1.00) has been reported to start and play as well; other versions are untested. |
 | **PC** | Windows 10 or 11 (64-bit), a graphics card with **Vulkan 1.3**, 16 GB of memory or more, and the [Microsoft Visual C++ Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe) (the launcher says so if it is missing). |
 
@@ -92,10 +95,11 @@ edition.
 3. **Set up Virtual Desktop.** Install the Streamer on the PC and choose **VDXR** as its OpenXR
    runtime. In the headset, set the streaming frame rate to **120**. (SteamVR works instead: choose
    it under "Headset connection" with the headset connected to SteamVR first; tested through level 4.)
-4. **Connect the DualSense to the PC**, then connect to the PC with Virtual Desktop and start
+4. **Connect the DualSense to the PC** (or, for the Quest controllers, unplug it and pick them in the
+   "Controllers" card), then connect to the PC with Virtual Desktop and start
    `RushVR.exe` on the desktop you see in the headset.
 5. **Pick a picture quality and press Play.** The headset switches to the game after a few seconds.
-6. In the game's own start-up question, choose the **DualShock**, not the Move controllers.
+6. In the game's own start-up question, choose the **DualShock** if you play with the DualSense, or the **Move controllers** if you play with the Quest controllers.
 
 Settings, saves and the log live in `%LOCALAPPDATA%\RushVR`: settings in `pc-vr\settings.txt`, the
 log in `pc-vr\user\log\shad_log.txt`, saves in `pc-vr\user\home`.
@@ -250,9 +254,9 @@ To make the one-file `RushVR.exe` that is released (Windows PowerShell, from the
 with `tools\pkgtool` holding PkgTool as `tools\make-release.ps1` describes):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\make-release.ps1 -Version 0.4.5
+powershell -ExecutionPolicy Bypass -File tools\make-release.ps1 -Version 0.5.0
 powershell -ExecutionPolicy Bypass -File tools\make-single-exe.ps1 `
-    -From build\release\RushVR-0.4.5-PC-VR-Windows -Out build\single\RushVR-0.4.5.exe
+    -From build\release\RushVR-0.5.0-PC-VR-Windows -Out build\single\RushVR-0.5.0.exe
 ```
 
 The first command packs the play folder (the emulator, the launcher, PkgTool and the default
