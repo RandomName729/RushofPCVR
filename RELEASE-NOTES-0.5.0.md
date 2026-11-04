@@ -9,6 +9,9 @@ Bring your own copy of the game (US release, CUSA03683, version 1.00); nothing o
   playing as the game's two PlayStation Move wands) is now part of RushVR for everyone, with no licence
   file. Switch it on in the start-up window's "Controllers" card; unplug the DualSense first, or the game
   keeps using it. Sliders set the aim angle, how far your hands reach and how far the guns turn.
+- **Experimental 90 and 120 frames a second**: two new "Aim for" choices in the start-up window.
+  The game keeps its speed and its captions stay with the voice (the ride can feel a touch faster
+  at times); a fast PC is needed to get near 120. 60 stays the default.
 - Everything from 0.4.5 is in: no more streaks in level 2, and the flashlight's shadows in level 1 are right.
 
 ## What you need

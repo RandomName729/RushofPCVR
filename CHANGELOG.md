@@ -11,6 +11,11 @@ let Until Dawn: Rush of Blood run under emulation.
   `settings.txt`); the DualSense stays the default. The card's sliders (`move_pitch`, `move_reach`,
   `move_turn`) set the aim angle, reach and turning. The Move code is in the public source
   (`src/core/vr/quest_move.h` and the Move and VR tracker libraries).
+- **Experimental 90 and 120 frames a second.** "Aim for" in the start-up window has two new
+  choices (`target_fps` now goes up to 120). The game was made for 60; in a test at 120 its
+  captions and animations kept their speed and the ride felt at most a touch faster now and then.
+  The test PC (RTX 4080 laptop) reached a median of about 77, up to 120 in light scenes. 60 stays
+  the default.
 - The banner no longer says FREE or MOTION.
 
 ## 0.4.5 - 2026-11-02

@@ -40,7 +40,7 @@ depth buffers, its timing and resolution).
 | **One file** | `RushVR.exe` is the whole download. It unpacks itself on first start and remembers your game. |
 | **Start-up window** | Low / Medium / High picture buttons, field of view, sharpness, edge smoothing, frame rate, and what the monitor shows. |
 | **Sharper than the console** | The game can draw up to 2880 x 3240 pixels an eye (the console draws 1152 x 1296). |
-| **Made for Virtual Desktop** | Held to 60 fps against a 120 Hz stream, with the console's own speed kept so captions stay with the voice. SteamVR works too. |
+| **Made for Virtual Desktop** | Held to 60 fps against a 120 Hz stream (90 and 120 fps to try, experimental), with the console's own speed kept so captions stay with the voice. SteamVR works too. |
 | **Your choice of controllers** | The **DualSense** (buttons, sticks, touchpad, motion sensors), or your **Quest controllers** playing as the game's two PlayStation Move wands, with reach, aim angle and turning sliders. |
 
 ## Status
@@ -121,7 +121,7 @@ setting is explained in the file itself.
 | `fov_of` | What that percent is of: `psvr` (a PlayStation VR's own view, the default) or `headset`. |
 | `runtime` | Which OpenXR runtime the game uses: `pc` (the one the PC has set up, the default), `virtualdesktop`, `steamvr`, or the full path of a runtime's `.json` file. Also in the start-up window. |
 | `eye_width` | The width in pixels each eye is drawn at, 1152 to 2880 (default 2304). 1152 is what the console draws; larger is sharper, slower and takes more memory. The Low, Medium and High buttons are 1536, 2304 and 2880. |
-| `target_fps` | The frame rate the game is held to, 20 to 60 (0 leaves the game's own timing). **60 is the default**, steady with Virtual Desktop at 120 Hz; use 45 at 90 Hz and 40 at 80 Hz. Also in the start-up window ("Aim for"). |
+| `target_fps` | The frame rate the game is held to, 20 to 120 (0 leaves the game's own timing). **60 is the default**, steady with Virtual Desktop at 120 Hz; use 45 at 90 Hz and 40 at 80 Hz. **90 and 120 are experimental**: the game keeps its speed and its captions stay with the voice, but the ride can feel a touch faster at times, and only a fast PC gets near 120. Also in the start-up window ("Aim for"). |
 | `aniso` | Anisotropic filtering of the game's textures: 0, 2, 4, 8 or 16 (default). |
 | `fxaa` | Smooths the picture's edges on its way to the headset: 0 off, 0.35 light, 0.65 normal (default), 1 strong. |
 | `sharpen` | Sharpening of the picture on its way to the headset, 0 to 1. |
