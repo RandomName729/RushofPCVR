@@ -1794,12 +1794,12 @@ function Show-MenuModern {
 
         $rate = New-Card "Frame rate" 380 92 332 150
         $form.Controls.Add($rate)
-        $targetKeys = @("0", "30", "35", "40", "45", "50", "60")
-        $targetNames = @("Original timing (the game's own pace)", "30 a second", "35 a second", "40 a second (steady at 80 Hz)", "45 a second (steady at 90 Hz)", "50 a second", "60 a second (recommended, 120 Hz)")
+        $targetKeys = @("0", "30", "35", "40", "45", "50", "60", "90", "120")
+        $targetNames = @("Original timing (the game's own pace)", "30 a second", "35 a second", "40 a second (steady at 80 Hz)", "45 a second (steady at 90 Hz)", "50 a second", "60 a second (recommended, 120 Hz)", "90 a second (experimental)", "120 a second (experimental)")
         [void](New-Label $rate "Aim for" 18 50 296 20 $cDim 9)
         $targetBox = New-Dropdown $rate $targetNames (Find-Nearest ([double[]]$targetKeys) (Read-Number "target_fps" 60)) 18 72 296
         [void](New-Label $rate "60 suits Virtual Desktop at 120 Hz (45 at 90 Hz, 40 at 80 Hz). Lower is steadier on a slower PC." 18 112 296 32 $cDim 8.5)
-        $tips.SetToolTip($targetBox, "The emulator holds the game to this rate. 60 is the game's own and looks smoothest with Virtual Desktop's frame rate at 120 (Streaming tab); at 90 or 80 use 45 or 40. Lower is steadier on a slower PC.")
+        $tips.SetToolTip($targetBox, "The emulator holds the game to this rate. 60 is the game's own and looks smoothest with Virtual Desktop's frame rate at 120 (Streaming tab); at 90 or 80 use 45 or 40. Lower is steadier on a slower PC. 90 and 120 are experimental: the game was made for 60, so check that its captions stay with the voice; the PC may not reach them.")
 
         # Row 2: the picture, the two sliders side by side. (y 254, 148 high)
         $picture = New-Card "Picture" 24 254 688 148
@@ -2270,11 +2270,14 @@ if ((Setting "fov_of" "psvr") -ne "psvr") { $env:SHADPS4_VR_FOV_OF = "headset" }
 # fps: the most frames a second. (pace, the older way to say it: refreshes of the headset a
 # frame is given, 1 or more.)
 $env:SHADPS4_VR_FPS_CAP = Setting "fps" "60"
-# target_fps: the rate the emulator steers the game to (20 to 60), by changing how often it tells
+# target_fps: the rate the emulator steers the game to (20 to 120; above 60 is experimental), by changing how often it tells
 # the game the headset has refreshed; 0 leaves the game's own timing.
 $target = 60
 if (-not [int]::TryParse((Setting "target_fps" "60"), [ref]$target)) { $target = 60 }
-if ($target -ge 20) { $env:SHADPS4_VR_TARGET_FPS = "$([math]::Min(60, $target))" }
+if ($target -ge 20) {
+    $env:SHADPS4_VR_TARGET_FPS = "$([math]::Min(120, $target))"
+    if ($target -gt 60 -and [int]$env:SHADPS4_VR_FPS_CAP -lt $target) { $env:SHADPS4_VR_FPS_CAP = "$([math]::Min(120, $target))" }
+}
 $pace = Setting "pace" ""
 if ($pace -eq "1") { $env:SHADPS4_VR_FASTEST_PACE = "1"; $env:SHADPS4_VR_FPS_CAP = "" } elseif ($pace -ne "" -and $pace -ne "2") { $env:SHADPS4_VR_PACE = $pace }
 if ((Setting "headset" "1") -eq "0") { $env:SHADPS4_OPENXR = "0" }

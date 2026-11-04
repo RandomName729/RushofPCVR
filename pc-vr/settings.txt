@@ -19,11 +19,12 @@
 # Desktop sets (Streaming > Frame rate).
 #fps=60
 
-# The frame rate the game is held to, 20 to 60 (0 = the game's own timing, 19 to 26 a second in
+# The frame rate the game is held to, 20 to 120 (0 = the game's own timing, 19 to 26 a second in
 # busy scenes). The emulator changes how often the game is told the headset has refreshed until
 # the game runs at this rate; the window sets it. 60 is the game's own rate and the default:
 # it is even with Virtual Desktop's frame rate at 120 (Streaming tab); use 45 at 90 and 40 at 80.
-# Anything above what the PC can do just means as fast as it can.
+# Anything above what the PC can do just means as fast as it can. 90 and 120 are experimental:
+# the game was made for 60, so check that its captions stay with the voice.
 #target_fps=60
 
 # How much of the headset's field of view the game draws, in percent, 70 to 160: at 100 the

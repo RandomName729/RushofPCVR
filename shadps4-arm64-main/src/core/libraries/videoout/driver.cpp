@@ -779,7 +779,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
     // DIAGNOSTIC / TEST: SHADPS4_VR_EVENT_US=<microseconds> refreshes the emulated headset by
     // its own clock every that long (8333 is the 120 Hz the title was made for).
-    // SHADPS4_VR_TARGET_FPS=<n> (20 to 60) makes the period follow what the title's frames take:
+    // SHADPS4_VR_TARGET_FPS=<n> (20 to 120; above 60 is experimental) makes the period follow what the title's frames take:
     // a frame takes the title about 2.5 periods plus its own work, so the period is moved until
     // frames come at that rate (60 is two refreshes of a 120 Hz display, 45 of a 90 Hz one and 40 of
     // an 80 Hz one, with no uneven frames), as short as 1.5 ms (SHADPS4_VR_EVENT_MIN_US) and as
@@ -787,7 +787,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     const double target_fps = [] {
         const char* value = std::getenv("SHADPS4_VR_TARGET_FPS");
         const double fps = value != nullptr ? std::atof(value) : 0.0;
-        return fps >= 20.0 && fps <= 60.0 ? fps : 0.0;
+        return fps >= 20.0 && fps <= 120.0 ? fps : 0.0;
     }();
     const double shortest_period = [] {
         const char* value = std::getenv("SHADPS4_VR_EVENT_MIN_US");
