@@ -30,9 +30,10 @@
 # How much of the headset's field of view the game draws, in percent, 70 to 160: at 100 the
 # picture fills all that the headset shows; less puts the same pixels over fewer degrees, a
 # sharper picture with a dark border where the rest was; more draws a wider view (softer, and
-# the coloured corners outside the lens circle move out of sight). 120 is the default: the
-# picture looks smoothest there, with no borders (the corners outside the lens circles are
-# black, see mask below). Without the mask, a Quest 3 needs 155 to hide them.
+# the coloured corners outside the lens circle move out of sight). 120 is the default and the
+# recommended one (what the window starts at, what every headset choice sets, and what a release
+# comes with): it fills the headset's view, and the corners outside the lens circles are black (see
+# mask below). Without the mask, a Quest 3 needs 155 to hide them.
 #fov=120
 
 # What fov is a percent of: headset (the headset being worn, whatever it is: the emulator asks
@@ -50,8 +51,8 @@
 # Black instead of the coloured corners outside the two lens circles of the picture, so that
 # fov can be set low (about the circle's size: 100 to 110) for a sharper picture without the
 # corners showing. 1 = the circles as drawn, 0 = off. If the picture's edge gets cut off, give
-# a bit more (1.05); if some colour is left at the edge, a bit less (0.97).
-#mask=1
+# a bit more (1.05); if some colour is left at the edge, a bit less (0.97). 0.9 is the default.
+#mask=0.9
 
 # Anisotropic filtering of the game's textures, 0 (as the game draws them), 2, 4, 8 or 16. It
 # keeps walls and floors seen at a slant sharp instead of blurred; costs a little of the graphics
@@ -73,9 +74,16 @@
 
 # The size of the picture handed to the headset's runtime, in percent of the size the game draws
 # it at: 100, 75 or 50. It is shrunk to that here, with a smoother filter than Virtual Desktop's.
-# Smaller is lighter for the PC and the stream, and a little softer; a large eye_width (2048 and
-# more) looks smoother at 50, which is what it is when this is not set (below 2048: 100). (The window sets it, with the Low, Medium and High buttons.)
+# Smaller is lighter for the PC and the stream, and softer. 100 is the default and the sharpest:
+# only the part of each eye's picture the headset shows (plus a margin) is sent. (The window sets
+# it, with the Low, Medium and High buttons.)
 #layer_scale=100
+
+# The emulator sends only what the headset shows of each eye's picture, and a margin around it
+# for turning the head: crop_margin, in degrees, 0 to 60 (12 is the default; the window offers
+# 6, 12, 20 and 30), or off to send the whole picture (as before 0.5.0). Raise it if black edges
+# flash at the sides when the head turns quickly. (The window sets it, under Picture quality.)
+#crop_margin=12
 
 # Which OpenXR runtime the game uses (also in the start-up window): pc, the one the PC has set
 # up (when Virtual Desktop's streamer was the last to set itself, that one); virtualdesktop,
@@ -133,11 +141,11 @@
 # writes this line itself when it has to ask where the game is.
 #game=C:\path\to\CUSA03683\eboot.bin
 
-# Which controllers play the game: dualsense (the default), or quest (the Quest controllers play
+# Which controllers play the game: dualsense (the default), or quest (the VR controllers play
 # as the game's two PlayStation Move wands; unplug the DualSense then). The window sets it.
 #controllers=dualsense
 
-# The Quest controllers' feel, set by three sliders in the window: move_pitch, how far the
+# The Move controllers' feel, set by three sliders in the window: move_pitch, how far the
 # in-game guns are raised above the way the controller points, in degrees (0 to 90); move_reach,
 # how far the in-game hands move when yours do, in percent of your own movement (5 to 130); and
 # move_turn, how far the guns turn when you turn your wrist, in percent (5 to 130). Used only
@@ -145,6 +153,16 @@
 #move_pitch=35
 #move_reach=55
 #move_turn=65
+
+# Which VR controllers play as the Move wands (the window's "Controller type"): touch (Meta
+# Quest, and most headsets streamed through Virtual Desktop), index, wmr (Windows Mixed
+# Reality), vive or simple. And which of their buttons does what, set in the window's Buttons
+# window: move_bind_<type>_<button>=<input> for the buttons t, move, cross, circle, square,
+# triangle, select and start; the inputs are trigger, grip, lower (A / X), upper (B / Y),
+# stick_click, stick_up, stick_down, pad (trackpad press), menu (left menu button), menu_right
+# and none, as far as the controller has them. Not set: the default layout.
+#move_controller=touch
+#move_bind_touch_cross=lower
 
 # Extra environment variables for the emulator, as many lines as needed.
 #env=NAME=value

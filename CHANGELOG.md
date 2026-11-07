@@ -3,6 +3,43 @@
 All notable changes to RushVR, newest first. RushVR is shadPS4 plus a VR layer and the fixes that
 let Until Dawn: Rush of Blood run under emulation.
 
+## 0.5.5 - 2026-11-06
+
+- **A much sharper picture in the headset.** See "Sharper picture" below: this is what fixes the
+  pixelated look.
+- **Better performance, and the right game speed at more "Aim for" frame rate choices** (timing
+  fixed for several of them).
+- **Settings in a folder with square brackets in its path** (`RushVR [0.5]`, say) were neither found
+  nor saved; the launcher now takes such paths literally.
+- **European release (CUSA02350): clock fix.** The 201 places where the game reads the processor's
+  clock are found by the code around them (all-or-nothing), so the captions should stay with the
+  voice there too; untested on a European copy. `SHADPS4_RDTSC_BY_PATTERN=1` uses the same search on
+  the US release.
+- Diagnostics for stutter hunting: `SHADPS4_MAP_TIMING=1` logs slow memory mapping calls.
+- **Any VR controllers as Move wands, not only Quest.** Bindings are offered for Meta Quest (Touch),
+  Valve Index, Windows Mixed Reality and HTC Vive controllers, and basic ones; the headset's runtime
+  picks the pair in your hands. Only the Quest ones have been tried.
+- **Controllers card**: two buttons, DualSense or Move controllers (the Move settings are switched
+  off with the DualSense), a "Controller type" choice and a **Buttons...** window with a dropdown
+  for each Move button (`move_controller` and `move_bind_<type>_<button>` in `settings.txt`).
+- **Sharper picture in the headset**: only the part of each eye's picture the headset shows (plus
+  a 12 degree margin) is sent, at full size (`SHADPS4_VR_CROP=0` sends the whole picture,
+  `SHADPS4_VR_CROP_MARGIN` changes the margin); "Picture size sent to the headset" is now Full size
+  for Low, Medium and High.
+- `tools\update-play-copy.ps1` builds and copies the emulator and launcher into a play copy.
+- **Your headset**: a new choice at the top of the start-up window (Meta Quest 3, 3S, 2, Pro, Pico 4,
+  PlayStation VR2, Valve Index, HTC Vive, Windows Mixed Reality, other) sets the field of view and
+  the controller type that suit it; both can still be changed by themselves. Only the Quest 3 is
+  tuned by testing.
+- **PlayStation VR2** (on a PC through Sony's adapter and SteamVR): a headset choice and a
+  "PlayStation VR2 Sense" controller type with the Sense buttons' names. SteamVR hands the Sense
+  controllers to the game like Touch controllers; untested.
+- **Field of view 120 is the default** for every headset choice (chosen on a Quest 3).
+- **Crop margin** in the window (Picture quality: Off, 6, 12, 20, 30 degrees; `crop_margin`).
+- The start-up window grows wider instead of longer: opened Picture quality and PC window cards
+  sit in a second column. A **Mods (experimental)** tab says that mod support is coming.
+- Known: the game can still close by itself now and then (seen once after a save); being looked at.
+
 ## 0.5.0 - 2026-11-03
 
 - **One free edition.** The Quest controllers playing as the game's two PlayStation Move wands,

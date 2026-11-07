@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/debug.h"
@@ -8,6 +13,7 @@
 #include <unistd.h>
 #endif
 #include "common/elf_info.h"
+#include "common/thread.h"
 #include "core/emulator_settings.h"
 #include "core/file_sys/fs.h"
 #include "core/libraries/kernel/memory.h"
@@ -17,6 +23,135 @@
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
 namespace Core {
+
+namespace {
+
+// DIAGNOSTIC: with SHADPS4_MAP_TIMING=1 or SHADPS4_FRAME_STATS set, the memory manager's mapping
+// calls are timed (from entry, so waiting for its locks counts too). A call that takes 5 ms or
+// more is logged at once with its thread; every 5 s there is a summary per kind of call.
+enum class MapOp : u32 {
+    Allocate,
+    Free,
+    PoolExpand,
+    PoolCommit,
+    PoolDecommit,
+    MapMemory,
+    MapFile,
+    UnmapMemory,
+    Protect,
+    Count,
+};
+
+constexpr std::array<const char*, static_cast<size_t>(MapOp::Count)> MapOpNames = {
+    "Allocate",    "Free",    "PoolExpand",  "PoolCommit", "PoolDecommit",
+    "MapMemory",   "MapFile", "UnmapMemory", "Protect",
+};
+
+struct MapOpStats {
+    std::atomic<u64> calls{0};
+    std::atomic<u64> total_ns{0};
+    std::atomic<u64> max_ns{0};
+    std::atomic<u64> slow{0};
+};
+
+std::array<MapOpStats, static_cast<size_t>(MapOp::Count)> map_stats;
+std::atomic<s64> map_last_report_ms{0};
+
+bool MapTimingEnabled() {
+    static const bool enabled = std::getenv("SHADPS4_MAP_TIMING") != nullptr ||
+                                std::getenv("SHADPS4_FRAME_STATS") != nullptr;
+    return enabled;
+}
+
+void MaybeReportMapTiming() {
+    const s64 now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now().time_since_epoch())
+                           .count();
+    s64 last = map_last_report_ms.load(std::memory_order_relaxed);
+    if (last == 0) {
+        map_last_report_ms.compare_exchange_strong(last, now_ms);
+        return;
+    }
+    if (now_ms - last < 5000 || !map_last_report_ms.compare_exchange_strong(last, now_ms)) {
+        return;
+    }
+    std::string text;
+    for (size_t i = 0; i < map_stats.size(); ++i) {
+        MapOpStats& stats = map_stats[i];
+        const u64 calls = stats.calls.exchange(0, std::memory_order_relaxed);
+        const u64 total_ns = stats.total_ns.exchange(0, std::memory_order_relaxed);
+        const u64 max_ns = stats.max_ns.exchange(0, std::memory_order_relaxed);
+        const u64 slow = stats.slow.exchange(0, std::memory_order_relaxed);
+        if (calls == 0) {
+            continue;
+        }
+        text += fmt::format("\n  {}: {} calls, {:.1f} ms in all, longest {:.1f} ms, {} of 5 ms "
+                            "or more",
+                            MapOpNames[i], calls, total_ns / 1e6, max_ns / 1e6, slow);
+    }
+    if (!text.empty()) {
+        LOG_INFO(Kernel_Vmm, "Memory calls in the last {:.1f} s:{}", (now_ms - last) / 1000.0,
+                 text);
+    }
+}
+
+// SHADPS4_FREE_BATCH=1: Free hands adjacent ranges to the GPU side as one range instead of one
+// call per mapping (same ranges in the end; each call takes the buffer and texture caches' locks).
+// Not with GPU readbacks on: then the buffer cache reads data back per range, and one range over
+// many mappings could join their buffers.
+bool FreeBatchGpuUnmap() {
+    static const bool wanted = [] {
+        const char* value = std::getenv("SHADPS4_FREE_BATCH");
+        return value != nullptr && value[0] == '1';
+    }();
+    return wanted && EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Disabled;
+}
+
+double MsSince(std::chrono::steady_clock::time_point start,
+               std::chrono::steady_clock::time_point end) {
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+class MapTimer {
+public:
+    MapTimer(MapOp op, u64 size) : op{op}, size{size}, enabled{MapTimingEnabled()} {
+        if (enabled) {
+            start = std::chrono::steady_clock::now();
+        }
+    }
+    ~MapTimer() {
+        if (!enabled) {
+            return;
+        }
+        const u64 ns = static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                            std::chrono::steady_clock::now() - start)
+                                            .count());
+        MapOpStats& stats = map_stats[static_cast<size_t>(op)];
+        stats.calls.fetch_add(1, std::memory_order_relaxed);
+        stats.total_ns.fetch_add(ns, std::memory_order_relaxed);
+        u64 longest = stats.max_ns.load(std::memory_order_relaxed);
+        while (ns > longest &&
+               !stats.max_ns.compare_exchange_weak(longest, ns, std::memory_order_relaxed)) {
+        }
+        if (ns >= 5'000'000) {
+            stats.slow.fetch_add(1, std::memory_order_relaxed);
+            LOG_INFO(Kernel_Vmm, "Slow memory call: {} of {:#x} bytes took {:.1f} ms on {}",
+                     MapOpNames[static_cast<size_t>(op)], size, ns / 1e6,
+                     Common::GetCurrentThreadName());
+        }
+        MaybeReportMapTiming();
+    }
+    MapTimer(const MapTimer&) = delete;
+    MapTimer& operator=(const MapTimer&) = delete;
+
+private:
+    MapOp op;
+    u64 size;
+    bool enabled;
+    std::chrono::steady_clock::time_point start{};
+};
+
+} // Anonymous namespace
 
 MemoryManager::MemoryManager() {
     LOG_INFO(Kernel_Vmm, "Virtual memory space initialized with regions:");
@@ -195,6 +330,7 @@ bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
 }
 
 PAddr MemoryManager::PoolExpand(PAddr search_start, PAddr search_end, u64 size, u64 alignment) {
+    MapTimer timer{MapOp::PoolExpand, size};
     std::scoped_lock lk{mutex, unmap_mutex};
     alignment = alignment > 0 ? alignment : 64_KB;
 
@@ -237,6 +373,7 @@ PAddr MemoryManager::PoolExpand(PAddr search_start, PAddr search_end, u64 size, 
 
 PAddr MemoryManager::Allocate(PAddr search_start, PAddr search_end, u64 size, u64 alignment,
                               s32 memory_type) {
+    MapTimer timer{MapOp::Allocate, size};
     std::scoped_lock lk{mutex, unmap_mutex};
     alignment = alignment > 0 ? alignment : 16_KB;
 
@@ -275,6 +412,7 @@ PAddr MemoryManager::Allocate(PAddr search_start, PAddr search_end, u64 size, u6
 }
 
 s32 MemoryManager::Free(PAddr phys_addr, u64 size, bool is_checked) {
+    MapTimer timer{MapOp::Free, size};
     // Basic bounds checking
     if (phys_addr > total_direct_size || (is_checked && phys_addr + size > total_direct_size)) {
         LOG_ERROR(Kernel_Vmm, "phys_addr {:#x}, size {:#x} goes outside dmem map", phys_addr, size);
@@ -284,6 +422,7 @@ s32 MemoryManager::Free(PAddr phys_addr, u64 size, bool is_checked) {
         return ORBIS_OK;
     }
 
+    const std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
     std::scoped_lock lk{unmap_mutex};
     // If this is a checked free, then all direct memory in range must be allocated.
     std::vector<std::pair<PAddr, u64>> free_list;
@@ -336,20 +475,67 @@ s32 MemoryManager::Free(PAddr phys_addr, u64 size, bool is_checked) {
         }
     }
 
+    const bool timing = MapTimingEnabled();
+    using TimingClock = std::chrono::steady_clock;
+    const TimingClock::time_point found_time =
+        timing ? TimingClock::now() : TimingClock::time_point{};
+
     // Early unmap from GPU to avoid deadlocking.
-    for (auto& [addr, unmap_size] : remove_list) {
-        if (IsValidGpuMapping(addr, unmap_size)) {
-            rasterizer->UnmapMemory(addr, unmap_size);
+    u32 gpu_calls = 0;
+    if (FreeBatchGpuUnmap()) {
+        VAddr run_addr = 0;
+        u64 run_size = 0;
+        for (auto& [addr, unmap_size] : remove_list) {
+            if (!IsValidGpuMapping(addr, unmap_size)) {
+                continue;
+            }
+            if (run_size != 0 && run_addr + run_size == addr) {
+                run_size += unmap_size;
+                continue;
+            }
+            if (run_size != 0) {
+                rasterizer->UnmapMemory(run_addr, run_size);
+                ++gpu_calls;
+            }
+            run_addr = addr;
+            run_size = unmap_size;
+        }
+        if (run_size != 0) {
+            rasterizer->UnmapMemory(run_addr, run_size);
+            ++gpu_calls;
+        }
+    } else {
+        for (auto& [addr, unmap_size] : remove_list) {
+            if (IsValidGpuMapping(addr, unmap_size)) {
+                rasterizer->UnmapMemory(addr, unmap_size);
+                ++gpu_calls;
+            }
         }
     }
+    const TimingClock::time_point gpu_time =
+        timing ? TimingClock::now() : TimingClock::time_point{};
 
     // Acquire writer lock
     std::scoped_lock lk2{mutex};
     auto mapping_mutation = mapping_generation.BeginMutation();
+    const TimingClock::time_point locked_time =
+        timing ? TimingClock::now() : TimingClock::time_point{};
 
     for (const auto& [addr, size] : remove_list) {
         LOG_INFO(Kernel_Vmm, "Unmapping direct mapping {:#x} with size {:#x}", addr, size);
         UnmapMemoryImpl(addr, size);
+    }
+    if (timing) {
+        const TimingClock::time_point unmapped_time = TimingClock::now();
+        if (MsSince(start_time, unmapped_time) >= 5.0) {
+            LOG_INFO(Kernel_Vmm,
+                     "Free of {:#x} bytes, {} mappings: finding them {:.1f} ms, GPU side {:.1f} ms "
+                     "({} calls{}), waiting for the lock {:.1f} ms, unmapping {:.1f} ms",
+                     size, remove_list.size(), MsSince(start_time, found_time),
+                     MsSince(found_time, gpu_time), gpu_calls,
+                     FreeBatchGpuUnmap() ? ", batched" : "", MsSince(gpu_time, locked_time),
+                     MsSince(locked_time, unmapped_time));
+        }
     }
 
     // Unmap all dmem areas within this area.
@@ -368,6 +554,7 @@ s32 MemoryManager::Free(PAddr phys_addr, u64 size, bool is_checked) {
 }
 
 s32 MemoryManager::PoolCommit(VAddr virtual_addr, u64 size, MemoryProt prot, s32 mtype) {
+    MapTimer timer{MapOp::PoolCommit, size};
     std::scoped_lock lk{unmap_mutex};
     std::unique_lock lk2{mutex};
     auto mapping_mutation = mapping_generation.BeginMutation();
@@ -508,6 +695,7 @@ MemoryManager::VMAHandle MemoryManager::CreateArea(VAddr virtual_addr, u64 size,
 s32 MemoryManager::MapMemory(void** out_addr, VAddr virtual_addr, u64 size, MemoryProt prot,
                              MemoryMapFlags flags, VMAType type, std::string_view name,
                              bool validate_dmem, PAddr phys_addr, u64 alignment) {
+    MapTimer timer{MapOp::MapMemory, size};
     // Certain games perform flexible mappings on loop to determine
     // the available flexible memory size. Questionable but we need to handle this.
     if (type == VMAType::Flexible && flexible_usage + size > total_flexible_size) {
@@ -688,6 +876,7 @@ s32 MemoryManager::MapMemory(void** out_addr, VAddr virtual_addr, u64 size, Memo
 
 s32 MemoryManager::MapFile(void** out_addr, VAddr virtual_addr, u64 size, MemoryProt prot,
                            MemoryMapFlags flags, s32 fd, s64 phys_addr) {
+    MapTimer timer{MapOp::MapFile, size};
     uintptr_t handle = 0;
     std::scoped_lock lk{unmap_mutex};
     // Get the file to map
@@ -786,6 +975,7 @@ s32 MemoryManager::MapFile(void** out_addr, VAddr virtual_addr, u64 size, Memory
 }
 
 s32 MemoryManager::PoolDecommit(VAddr virtual_addr, u64 size) {
+    MapTimer timer{MapOp::PoolDecommit, size};
     std::scoped_lock lk{unmap_mutex};
     ASSERT_MSG(IsValidMapping(virtual_addr, size), "Attempted to access invalid address {:#x}",
                virtual_addr);
@@ -870,6 +1060,7 @@ s32 MemoryManager::PoolDecommit(VAddr virtual_addr, u64 size) {
 }
 
 s32 MemoryManager::UnmapMemory(VAddr virtual_addr, u64 size) {
+    MapTimer timer{MapOp::UnmapMemory, size};
     if (size == 0) {
         return ORBIS_OK;
     }
@@ -1101,6 +1292,7 @@ s32 MemoryManager::SealGuestExecutable(VAddr addr, u64 size) {
 }
 
 s32 MemoryManager::Protect(VAddr addr, u64 size, MemoryProt prot) {
+    MapTimer timer{MapOp::Protect, size};
     // If size is zero, then there's nothing to protect
     if (size == 0) {
         return ORBIS_OK;

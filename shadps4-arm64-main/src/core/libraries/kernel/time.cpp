@@ -14,6 +14,7 @@
 #include <chrono>
 #include <memory>
 #include <cstring>
+#include <functional>
 
 #include "common/assert.h"
 #include "common/elf_info.h"
@@ -22,6 +23,7 @@
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/kernel/posix_error.h"
+#include "core/libraries/kernel/rdtsc_patterns.h"
 #include "core/libraries/kernel/time.h"
 #include "core/libraries/libs.h"
 
@@ -168,10 +170,9 @@ LONG CALLBACK RdtscHandler(PEXCEPTION_POINTERS info) {
     return EXCEPTION_CONTINUE_EXECUTION;
 }
 
-void InstallRdtscTrap(double hz) {
-    auto* trap = new RdtscTrap();
+// The rdtsc instructions of the US 1.00 build, from its table.
+std::vector<uintptr_t> RdtscSitesFromTable(u32* candidates) {
     std::vector<uintptr_t> sites;
-    u32 candidates = 0;
     // Every rdtsc instruction in the US 1.00 game (found by disassembling it), except the
     // profiler's zone markers, which keep only the low half of the result for the profiler.
     static const u32 kRdtscSites[] = {
@@ -203,11 +204,107 @@ void InstallRdtscTrap(double hz) {
     0x1aeec5e,
     };
     for (const u32 offset : kRdtscSites) {
-        ++candidates;
+        ++*candidates;
         const u8* q = reinterpret_cast<const u8*>(0x800000000ull + offset);
         if (GuestReadable(q, 2) && q[0] == 0x0F && q[1] == 0x31) {
             sites.push_back(reinterpret_cast<uintptr_t>(q));
         }
+    }
+    return sites;
+}
+
+// The executable memory that starts at the title's base address.
+std::pair<const u8*, const u8*> TitleCode() {
+    const u8* const begin = reinterpret_cast<const u8*>(0x800000000ull);
+    const u8* end = begin;
+    for (;;) {
+        MEMORY_BASIC_INFORMATION info{};
+        if (VirtualQuery(end, &info, sizeof(info)) == 0 || info.State != MEM_COMMIT ||
+            (info.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                             PAGE_EXECUTE_WRITECOPY)) == 0 ||
+            (info.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0) {
+            break;
+        }
+        end = static_cast<const u8*>(info.BaseAddress) + info.RegionSize;
+    }
+    return {begin, end};
+}
+
+// The same rdtsc instructions found by the code around them (RdtscPatterns), for a build
+// without a table of its own. Each piece is looked for where the US build has it, then moved by
+// as much as the last piece found was, then anywhere (where it must occur exactly once).
+// Returns nothing unless every one is found.
+std::vector<uintptr_t> RdtscSitesByPattern(u32* candidates) {
+    const std::pair<const u8*, const u8*> code = TitleCode();
+    const u8* const begin = code.first;
+    const u8* const end = code.second;
+    const auto matches = [begin, end](const u8* at, const u8* bytes, size_t size) {
+        return at >= begin && at <= end && static_cast<size_t>(end - at) >= size &&
+               std::memcmp(at, bytes, size) == 0;
+    };
+    std::vector<uintptr_t> sites;
+    u32 same_place = 0;
+    u32 missing = 0;
+    ptrdiff_t moved = 0;
+    for (const RdtscPattern& pattern : RdtscPatterns) {
+        ++*candidates;
+        const u8* const bytes = RdtscPatternBytes + pattern.start;
+        const u8* found = nullptr;
+        const u8* const guess = begin + pattern.site - pattern.at;
+        if (matches(guess, bytes, pattern.size)) {
+            found = guess;
+            ++same_place;
+        } else if (moved != 0 && matches(guess + moved, bytes, pattern.size)) {
+            found = guess + moved;
+        } else {
+            const std::boyer_moore_horspool_searcher searcher(bytes, bytes + pattern.size);
+            const u8* const first = std::search(begin, end, searcher);
+            if (first != end && std::search(first + 1, end, searcher) == end) {
+                found = first;
+            }
+        }
+        if (found != nullptr) {
+            moved = found - guess;
+        }
+        if (found == nullptr) {
+            if (++missing <= 5) {
+                LOG_WARNING(Lib_Kernel, "rdtsc trap: the code around US offset {:#x} was not found "
+                                        "exactly once",
+                            pattern.site);
+            }
+            continue;
+        }
+        sites.push_back(reinterpret_cast<uintptr_t>(found + pattern.at));
+    }
+    if (missing != 0) {
+        LOG_WARNING(Lib_Kernel, "rdtsc trap: {} of {} places not found in {:#x} bytes of code; "
+                                "nothing changed",
+                    missing, *candidates, static_cast<size_t>(end - begin));
+        return {};
+    }
+    LOG_INFO(Lib_Kernel, "rdtsc trap: all {} places found by the code around them, {} of them "
+                         "where the US build has them",
+             sites.size(), same_place);
+    return sites;
+}
+
+void InstallRdtscTrap(double hz, std::vector<uintptr_t> sites, u32 candidates) {
+    auto* trap = new RdtscTrap();
+    // The report (and the switch of SHADPS4_RDTSC_SWITCH_S) is a diagnostic: it runs only with
+    // SHADPS4_FRAME_STATS or SHADPS4_RDTSC_REPORT set. Then the cost of one trapped read is
+    // measured first, on a ud2 of our own.
+    const bool report_wanted = std::getenv("SHADPS4_FRAME_STATS") != nullptr ||
+                               std::getenv("SHADPS4_RDTSC_REPORT") != nullptr;
+    u8* const probe = report_wanted
+                          ? static_cast<u8*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE,
+                                                          PAGE_EXECUTE_READWRITE))
+                          : nullptr;
+    if (probe != nullptr) {
+        probe[0] = 0x0F; // ud2
+        probe[1] = 0x0B;
+        probe[2] = 0xC3; // ret
+        FlushInstructionCache(GetCurrentProcess(), probe, 3);
+        sites.push_back(reinterpret_cast<uintptr_t>(probe));
     }
     std::sort(sites.begin(), sites.end());
     trap->sites = std::move(sites);
@@ -223,6 +320,26 @@ void InstallRdtscTrap(double hz) {
     trap->params.store(new RdtscParams{start, start, switch_after > 0 ? den : target_num, den});
     g_trap = trap;
     AddVectoredExceptionHandler(1, RdtscHandler);
+    double trap_us = 0.0;
+    if (probe != nullptr) {
+        constexpr int Runs = 2000;
+        const auto probe_fn = reinterpret_cast<void (*)()>(probe);
+        const auto begin = std::chrono::steady_clock::now();
+        for (int i = 0; i < Runs; ++i) {
+            probe_fn();
+        }
+        trap_us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() -
+                                                            begin)
+                      .count() /
+                  Runs;
+        const auto it = std::lower_bound(trap->sites.begin(), trap->sites.end(),
+                                         reinterpret_cast<uintptr_t>(probe));
+        trap->counts[it - trap->sites.begin()].store(0);
+        trap->total.store(0);
+        LOG_INFO(Lib_Kernel, "rdtsc trap: one trapped read costs about {:.2f} us (measured {} "
+                             "times)",
+                 trap_us, Runs);
+    }
     u32 patched = 0;
     for (const uintptr_t site : trap->sites) {
         void* p = reinterpret_cast<void*>(site);
@@ -242,16 +359,13 @@ void InstallRdtscTrap(double hz) {
     LOG_INFO(Lib_Kernel,
              "rdtsc trap: {} of {} known rdtsc instructions found, {} patched; the "
              "title's counter will run at {:.0f} Hz (host {} Hz, SHADPS4_RDTSC_HZ){}",
-             trap->sites.size(), candidates, patched, static_cast<double>(target_num), den,
+             trap->sites.size() - (probe != nullptr ? 1 : 0), candidates, patched, static_cast<double>(target_num), den,
              switch_after > 0 ? fmt::format(", after {:.0f} s at the host's own rate", switch_after)
                               : std::string{});
-    // The report (and the switch of SHADPS4_RDTSC_SWITCH_S) is a diagnostic: it runs only with
-    // SHADPS4_FRAME_STATS or SHADPS4_RDTSC_REPORT set.
-    if (std::getenv("SHADPS4_FRAME_STATS") == nullptr && std::getenv("SHADPS4_RDTSC_REPORT") == nullptr &&
-        switch_after <= 0) {
+    if (!report_wanted && switch_after <= 0) {
         return;
     }
-    std::thread([trap, switch_after, target_num, den] {
+    std::thread([trap, switch_after, target_num, den, trap_us] {
         Common::SetCurrentThreadName("RdtscReport");
         std::vector<u64> last(trap->sites.size() + 1, 0);
         u64 last_total = 0;
@@ -289,6 +403,13 @@ void InstallRdtscTrap(double hz) {
             std::sort(top.rbegin(), top.rend());
             std::string text = fmt::format("rdtsc trap: {} reads in the last 5 s from {} places",
                                            total - last_total, top.size());
+            if (trap_us > 0.0 && real > 0.0) {
+                const double ms_per_s =
+                    static_cast<double>(total - last_total) / real * trap_us / 1000.0;
+                text += fmt::format(", about {:.1f} ms of processor time a second ({:.1f}% of "
+                                    "one core)",
+                                    ms_per_s, ms_per_s / 10.0);
+            }
             last_total = total;
             for (size_t i = 0; i < top.size() && i < 8; ++i) {
                 text += fmt::format("\n  {} x {}", top[i].first,
@@ -332,7 +453,10 @@ void InstallRdtscTrap(double hz) {
 /// that runs at the console's rate. SHADPS4_RDTSC_HZ=<hz> sets another rate, 0 leaves it alone.
 void InstallGuestClockFix() {
 #ifdef _WIN64
-    if (Common::ElfInfo::Instance().GameSerial() != "CUSA03683") {
+    const auto serial = Common::ElfInfo::Instance().GameSerial();
+    const bool us = serial == "CUSA03683";
+    const bool europe = serial == "CUSA02350";
+    if (!us && !europe) {
         return;
     }
     const char* setting = std::getenv("SHADPS4_RDTSC_HZ");
@@ -341,7 +465,22 @@ void InstallGuestClockFix() {
         LOG_INFO(Lib_Kernel, "The game's own clock is left as the PC's (SHADPS4_RDTSC_HZ=0)");
         return;
     }
-    InstallRdtscTrap(hz);
+    // The US build has the places in a table. The European build is searched for the code
+    // around each of them, and nothing is changed unless every one is found.
+    // SHADPS4_RDTSC_BY_PATTERN=1 uses the search for the US build too, to check it.
+    const char* by_pattern_setting = std::getenv("SHADPS4_RDTSC_BY_PATTERN");
+    const bool by_pattern =
+        !us || (by_pattern_setting != nullptr && by_pattern_setting[0] == '1');
+    u32 candidates = 0;
+    std::vector<uintptr_t> sites =
+        by_pattern ? RdtscSitesByPattern(&candidates) : RdtscSitesFromTable(&candidates);
+    if (sites.empty()) {
+        LOG_WARNING(Lib_Kernel, "The game's own clock is left as the PC's: its places were not "
+                                "found ({})",
+                    serial);
+        return;
+    }
+    InstallRdtscTrap(hz, std::move(sites), candidates);
 #endif
 }
 

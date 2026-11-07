@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <span>
+#include <string_view>
 #include <string>
 #include <thread>
 
@@ -314,6 +316,18 @@ struct OpenXrHost::Impl {
     std::vector<XrSwapchainImageVulkanKHR> swapchain_images;
     u32 swapchain_width{};
     u32 swapchain_height{};
+    /// What the headset shows of the world (both eyes together), from xrLocateViews.
+    Fov headset_seen{};
+    bool headset_seen_valid{};
+    /// The part of each eye's picture that is handed over (see Crop), as tangents of its edges:
+    /// out, in, up, down. Valid while `crop_active`.
+    struct CropArea {
+        bool active{};
+        float tan_out{}, tan_in{}, tan_up{}, tan_down{};
+        // In pixels of one eye's copy of the frame (the left eye's; the right eye's is mirrored).
+        u32 x0{}, x1{}, y0{}, y1{};
+    };
+    CropArea shown_crop{};
     vk::Format swapchain_format{vk::Format::eUndefined};
     bool swapchain_failed{};
 
@@ -359,14 +373,28 @@ struct OpenXrHost::Impl {
     bool actions_synced{};
 
     // the headset's controllers as Move wands (QuestMove::Enabled()).
-    XrAction act_trigger{XR_NULL_HANDLE};
-    XrAction act_squeeze{XR_NULL_HANDLE};
-    XrAction act_lower{XR_NULL_HANDLE};       // A (right) / X (left)
-    XrAction act_upper{XR_NULL_HANDLE};       // B (right) / Y (left)
-    XrAction act_stick{XR_NULL_HANDLE};       // thumbstick, 2D
-    XrAction act_stick_click{XR_NULL_HANDLE};
-    XrAction act_menu{XR_NULL_HANDLE};        // left controller only
+    /// The Move buttons, in the order the bindings name them (SHADPS4_MOVE_BIND_<name>).
+    enum MoveButton : u32 { BtnT, BtnMove, BtnCross, BtnCircle, BtnSquare, BtnTriangle,
+                            BtnSelect, BtnStart, MoveButtonCount };
+    static constexpr std::array<const char*, MoveButtonCount> MoveButtonNames{
+        "T", "MOVE", "CROSS", "CIRCLE", "SQUARE", "TRIANGLE", "SELECT", "START"};
+    static constexpr std::array<u16, MoveButtonCount> MoveButtonBits{
+        QuestMove::T,      QuestMove::MOVE,     QuestMove::CROSS,  QuestMove::CIRCLE,
+        QuestMove::SQUARE, QuestMove::TRIANGLE, QuestMove::SELECT, QuestMove::START};
+    /// One action per Move button (a float, so that a trigger keeps its analog value and a
+    /// button reads 0 or 1), bound to whatever the player chose for it on each kind of
+    /// controller.
+    std::array<XrAction, MoveButtonCount> act_buttons{};
+    XrAction act_stick{XR_NULL_HANDLE};       // thumbstick (or trackpad), 2D
     XrAction act_haptic{XR_NULL_HANDLE};
+    static constexpr std::size_t MaxProfiles = 8;
+    struct WandInput;
+    /// For each kind of controller: what each Move button is bound to (nullptr: nothing).
+    std::array<std::array<const WandInput*, MoveButtonCount>, MaxProfiles> wand_bindings{};
+    std::array<XrPath, MaxProfiles> profile_paths{};
+    std::size_t active_profile{};
+    std::size_t logged_profile{MaxProfiles};
+    u32 profile_check_frames{};
     bool quest_actions{};
     bool quest_trigger_down[2]{};
     bool quest_squeeze_down[2]{};
@@ -795,30 +823,50 @@ struct OpenXrHost::Impl {
             return;
         }
 
-        std::vector<XrActionSuggestedBinding> bindings;
-        const auto bind = [&](XrAction action, const char* path) {
-            XrPath binding = XR_NULL_PATH;
-            if (XR_SUCCEEDED(xrStringToPath(instance, path, &binding))) {
-                bindings.push_back({action, binding});
-            }
-        };
-        bind(act_grip, "/user/hand/left/input/grip/pose");
-        bind(act_grip, "/user/hand/right/input/grip/pose");
         if (QuestMove::Enabled()) {
-            CreateQuestMoveActions(bind);
+            CreateQuestMoveActions();
         }
-        XrInteractionProfileSuggestedBinding suggested{
-            XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
-        xrStringToPath(instance, "/interaction_profiles/oculus/touch_controller",
-                       &suggested.interactionProfile);
-        suggested.countSuggestedBindings = static_cast<uint32_t>(bindings.size());
-        suggested.suggestedBindings = bindings.data();
-        if (const XrResult result = xrSuggestInteractionProfileBindings(instance, &suggested);
-            XR_FAILED(result)) {
-            LOG_WARNING(Core_Vr, "The headset's runtime takes no bindings for its controllers: {}",
-                        ResultText(instance, result));
+        // The same actions for every pair of controllers OpenXR knows without an extension:
+        // the runtime picks the one that is in the player's hands (and SteamVR lets the player
+        // change them). Profiles that a runtime does not know are skipped.
+        u32 profiles_taken = 0;
+        const auto profiles = ControllerProfiles();
+        for (std::size_t p = 0; p < profiles.size(); ++p) {
+            const ControllerProfile& profile = profiles[p];
+            std::vector<XrActionSuggestedBinding> bindings;
+            const auto bind = [&](XrAction action, const char* path) {
+                XrPath binding = XR_NULL_PATH;
+                if (action != XR_NULL_HANDLE && path != nullptr &&
+                    XR_SUCCEEDED(xrStringToPath(instance, path, &binding))) {
+                    bindings.push_back({action, binding});
+                }
+            };
+            bind(act_grip, "/user/hand/left/input/grip/pose");
+            bind(act_grip, "/user/hand/right/input/grip/pose");
+            if (quest_actions) {
+                BindWandInputs(p, bind);
+            }
+            XrInteractionProfileSuggestedBinding suggested{
+                XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+            if (XR_FAILED(xrStringToPath(instance, profile.path, &suggested.interactionProfile))) {
+                continue;
+            }
+            profile_paths[p] = suggested.interactionProfile;
+            suggested.countSuggestedBindings = static_cast<uint32_t>(bindings.size());
+            suggested.suggestedBindings = bindings.data();
+            if (const XrResult result = xrSuggestInteractionProfileBindings(instance, &suggested);
+                XR_FAILED(result)) {
+                LOG_INFO(Core_Vr, "The headset's runtime takes no bindings for {}: {}",
+                         profile.name, ResultText(instance, result));
+                continue;
+            }
+            ++profiles_taken;
+        }
+        if (profiles_taken == 0) {
+            LOG_WARNING(Core_Vr, "The headset's runtime takes no bindings for its controllers");
             return;
         }
+        LOG_INFO(Core_Vr, "Controller bindings offered for {} kinds of controllers", profiles_taken);
 
         XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
         attach.countActionSets = 1;
@@ -841,9 +889,190 @@ struct OpenXrHost::Impl {
         actions_ready = true;
     }
 
-    /// the inputs of the headset's controllers that stand in for Move wands.
+    /// An input of a pair of VR controllers that a Move button can be bound to. `left` and
+    /// `right` are the input on each hand (relative to /user/hand/<hand>), nullptr where that
+    /// hand has none: an input of one hand only (a left menu button) works for both wands.
+    /// The ids are what settings.txt and the launcher's Buttons window use; keep them and the
+    /// defaults below the same as in pc-vr/launch.ps1 ($controllerTypes).
+    enum class InputKind : u8 { Path, StickUp, StickDown };
+    struct WandInput {
+        const char* id;
+        const char* label;
+        const char* left;
+        const char* right;
+        InputKind kind;
+    };
+    /// A pair of VR controllers OpenXR knows without an extension, what of it can stand in for
+    /// a Move button, and what does by default.
+    struct ControllerProfile {
+        const char* key;  ///< SHADPS4_MOVE_CONTROLLER / the launcher's "Controller type"
+        const char* name;
+        const char* path;
+        const char* stick; ///< for "stick up" and "stick down", nullptr: none
+        std::span<const WandInput> inputs;
+        std::array<const char*, MoveButtonCount> defaults; ///< ids, nullptr: nothing
+    };
+
+    static std::span<const ControllerProfile> ControllerProfiles() {
+        using K = InputKind;
+        static const WandInput Touch[] = {
+            {"trigger", "Trigger", "/input/trigger/value", "/input/trigger/value", K::Path},
+            {"grip", "Grip", "/input/squeeze/value", "/input/squeeze/value", K::Path},
+            {"lower", "A / X", "/input/x/click", "/input/a/click", K::Path},
+            {"upper", "B / Y", "/input/y/click", "/input/b/click", K::Path},
+            {"stick_click", "Stick press", "/input/thumbstick/click", "/input/thumbstick/click",
+             K::Path},
+            {"stick_up", "Stick up", nullptr, nullptr, K::StickUp},
+            {"stick_down", "Stick down", nullptr, nullptr, K::StickDown},
+            {"menu", "Left menu button", "/input/menu/click", nullptr, K::Path},
+        };
+        static const WandInput Index[] = {
+            {"trigger", "Trigger", "/input/trigger/value", "/input/trigger/value", K::Path},
+            {"grip", "Grip (squeeze)", "/input/squeeze/value", "/input/squeeze/value", K::Path},
+            {"lower", "A", "/input/a/click", "/input/a/click", K::Path},
+            {"upper", "B", "/input/b/click", "/input/b/click", K::Path},
+            {"stick_click", "Stick press", "/input/thumbstick/click", "/input/thumbstick/click",
+             K::Path},
+            {"stick_up", "Stick up", nullptr, nullptr, K::StickUp},
+            {"stick_down", "Stick down", nullptr, nullptr, K::StickDown},
+            {"pad", "Trackpad press", "/input/trackpad/force", "/input/trackpad/force", K::Path},
+            {"menu", "Left trackpad press", "/input/trackpad/force", nullptr, K::Path},
+        };
+        static const WandInput Wmr[] = {
+            {"trigger", "Trigger", "/input/trigger/value", "/input/trigger/value", K::Path},
+            {"grip", "Grip", "/input/squeeze/click", "/input/squeeze/click", K::Path},
+            {"pad", "Trackpad press", "/input/trackpad/click", "/input/trackpad/click", K::Path},
+            {"stick_click", "Stick press", "/input/thumbstick/click", "/input/thumbstick/click",
+             K::Path},
+            {"stick_up", "Stick up", nullptr, nullptr, K::StickUp},
+            {"stick_down", "Stick down", nullptr, nullptr, K::StickDown},
+            {"menu", "Left menu button", "/input/menu/click", nullptr, K::Path},
+            {"menu_right", "Right menu button", nullptr, "/input/menu/click", K::Path},
+        };
+        static const WandInput Vive[] = {
+            {"trigger", "Trigger", "/input/trigger/value", "/input/trigger/value", K::Path},
+            {"grip", "Grip", "/input/squeeze/click", "/input/squeeze/click", K::Path},
+            {"pad", "Trackpad press", "/input/trackpad/click", "/input/trackpad/click", K::Path},
+            {"stick_up", "Trackpad up (touch)", nullptr, nullptr, K::StickUp},
+            {"stick_down", "Trackpad down (touch)", nullptr, nullptr, K::StickDown},
+            {"menu", "Left menu button", "/input/menu/click", nullptr, K::Path},
+            {"menu_right", "Right menu button", nullptr, "/input/menu/click", K::Path},
+        };
+        static const WandInput Simple[] = {
+            {"trigger", "Select button", "/input/select/click", "/input/select/click", K::Path},
+            {"menu", "Left menu button", "/input/menu/click", nullptr, K::Path},
+            {"menu_right", "Right menu button", nullptr, "/input/menu/click", K::Path},
+        };
+        // Defaults in the order T, MOVE, CROSS, CIRCLE, SQUARE, TRIANGLE, SELECT, START.
+        static const ControllerProfile Profiles[] = {
+            // Meta Quest (Touch), and what most runtimes offer other controllers as (Pico and
+            // others through Virtual Desktop).
+            {"touch", "Meta Quest (Touch) controllers",
+             "/interaction_profiles/oculus/touch_controller", "/input/thumbstick", Touch,
+             {"trigger", "grip", "lower", "upper", "stick_click", "stick_up", "stick_down",
+              "menu"}},
+            {"index", "Valve Index controllers", "/interaction_profiles/valve/index_controller",
+             "/input/thumbstick", Index,
+             {"trigger", "grip", "lower", "upper", "stick_click", "stick_up", "stick_down",
+              "menu"}},
+            {"wmr", "Windows Mixed Reality controllers",
+             "/interaction_profiles/microsoft/motion_controller", "/input/thumbstick", Wmr,
+             {"trigger", "grip", "pad", "menu_right", "stick_click", "stick_up", "stick_down",
+              "menu"}},
+            {"vive", "HTC Vive controllers", "/interaction_profiles/htc/vive_controller",
+             "/input/trackpad", Vive,
+             {"trigger", "grip", "menu_right", nullptr, "pad", "stick_up", "stick_down",
+              "menu"}},
+            {"simple", "basic controllers", "/interaction_profiles/khr/simple_controller",
+             nullptr, Simple,
+             {"trigger", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, "menu"}},
+        };
+        static_assert(std::size(Profiles) <= MaxProfiles);
+        return Profiles;
+    }
+
+    static const WandInput* FindInput(const ControllerProfile& profile, std::string_view id) {
+        for (const WandInput& input : profile.inputs) {
+            if (id == input.id) {
+                return &input;
+            }
+        }
+        return nullptr;
+    }
+
+    /// What each Move button is bound to on each kind of controller: the defaults, with the
+    /// player's choices on top. SHADPS4_MOVE_CONTROLLER=<touch|index|wmr|vive|simple> names
+    /// the kind the choices are for (unset: every kind that has the input chosen);
+    /// SHADPS4_MOVE_BIND_<button>=<input id, or none> is a choice (the launcher's Buttons
+    /// window writes them).
+    void ResolveWandBindings() {
+        const char* chosen_kind = std::getenv("SHADPS4_MOVE_CONTROLLER");
+        const std::string_view chosen = chosen_kind != nullptr ? chosen_kind : "";
+        const auto profiles = ControllerProfiles();
+        for (std::size_t p = 0; p < profiles.size(); ++p) {
+            const ControllerProfile& profile = profiles[p];
+            const bool mine = chosen.empty() || chosen == profile.key;
+            for (u32 b = 0; b < MoveButtonCount; ++b) {
+                const WandInput* input =
+                    profile.defaults[b] != nullptr ? FindInput(profile, profile.defaults[b]) : nullptr;
+                const std::string env = std::string{"SHADPS4_MOVE_BIND_"} + MoveButtonNames[b];
+                if (const char* value = std::getenv(env.c_str()); mine && value != nullptr &&
+                                                                    value[0] != '\0') {
+                    if (std::string_view{value} == "none") {
+                        input = nullptr;
+                    } else if (const WandInput* picked = FindInput(profile, value)) {
+                        input = picked;
+                    } else if (!chosen.empty()) {
+                        LOG_WARNING(Core_Vr, "Move button {}: {} has no input \"{}\", keeping its default",
+                                    MoveButtonNames[b], profile.name, value);
+                    }
+                }
+                if (input != nullptr && input->kind != InputKind::Path && profile.stick == nullptr) {
+                    input = nullptr;
+                }
+                wand_bindings[p][b] = input;
+            }
+        }
+    }
+
+    /// The layout of one kind of controller, for the log.
+    std::string DescribeBindings(std::size_t p) const {
+        std::string text;
+        for (u32 b = 0; b < MoveButtonCount; ++b) {
+            if (!text.empty()) {
+                text += ", ";
+            }
+            text += MoveButtonNames[b];
+            text += " = ";
+            text += wand_bindings[p][b] != nullptr ? wand_bindings[p][b]->label : "nothing";
+        }
+        return text;
+    }
+
     template <typename Bind>
-    void CreateQuestMoveActions(Bind&& bind) {
+    void BindWandInputs(std::size_t p, Bind&& bind) {
+        const ControllerProfile& profile = ControllerProfiles()[p];
+        for (const char* hand : {"left", "right"}) {
+            const std::string base = std::string{"/user/hand/"} + hand;
+            if (profile.stick != nullptr) {
+                bind(act_stick, (base + profile.stick).c_str());
+            }
+            bind(act_haptic, (base + "/output/haptic").c_str());
+            for (u32 b = 0; b < MoveButtonCount; ++b) {
+                const WandInput* input = wand_bindings[p][b];
+                if (input == nullptr || input->kind != InputKind::Path) {
+                    continue;
+                }
+                const char* path = hand[0] == 'l' ? input->left : input->right;
+                if (path != nullptr) {
+                    bind(act_buttons[b], (base + path).c_str());
+                }
+            }
+        }
+    }
+
+    /// The inputs of the headset's controllers that stand in for Move wands.
+    void CreateQuestMoveActions() {
         const auto make = [&](XrAction& action, const char* name, XrActionType type,
                               bool both_hands) {
             XrActionCreateInfo info{XR_TYPE_ACTION_CREATE_INFO};
@@ -856,32 +1085,29 @@ struct OpenXrHost::Impl {
             return XR_SUCCEEDED(xrCreateAction(action_set, &info, &action));
         };
         bool ok = true;
-        ok &= make(act_trigger, "wand-trigger", XR_ACTION_TYPE_FLOAT_INPUT, true);
-        ok &= make(act_squeeze, "wand-squeeze", XR_ACTION_TYPE_FLOAT_INPUT, true);
-        ok &= make(act_lower, "wand-lower", XR_ACTION_TYPE_BOOLEAN_INPUT, true);
-        ok &= make(act_upper, "wand-upper", XR_ACTION_TYPE_BOOLEAN_INPUT, true);
+        static constexpr std::array<const char*, MoveButtonCount> ActionNames{
+            "wand-t", "wand-move", "wand-cross", "wand-circle",
+            "wand-square", "wand-triangle", "wand-select", "wand-start"};
+        for (u32 b = 0; b < MoveButtonCount; ++b) {
+            ok &= make(act_buttons[b], ActionNames[b], XR_ACTION_TYPE_FLOAT_INPUT, true);
+        }
         ok &= make(act_stick, "wand-stick", XR_ACTION_TYPE_VECTOR2F_INPUT, true);
-        ok &= make(act_stick_click, "wand-stick-click", XR_ACTION_TYPE_BOOLEAN_INPUT, true);
-        ok &= make(act_menu, "wand-menu", XR_ACTION_TYPE_BOOLEAN_INPUT, true);
         ok &= make(act_haptic, "wand-rumble", XR_ACTION_TYPE_VIBRATION_OUTPUT, true);
         if (!ok) {
-            LOG_WARNING(Core_Vr, "Quest controllers as Move wands: their inputs could not be "
+            LOG_WARNING(Core_Vr, "VR controllers as Move wands: their inputs could not be "
                                  "asked for");
             return;
         }
-        for (const char* hand : {"left", "right"}) {
-            const std::string base = std::string{"/user/hand/"} + hand;
-            bind(act_trigger, (base + "/input/trigger/value").c_str());
-            bind(act_squeeze, (base + "/input/squeeze/value").c_str());
-            bind(act_stick, (base + "/input/thumbstick").c_str());
-            bind(act_stick_click, (base + "/input/thumbstick/click").c_str());
-            bind(act_haptic, (base + "/output/haptic").c_str());
+        ResolveWandBindings();
+        {
+            const char* chosen = std::getenv("SHADPS4_MOVE_CONTROLLER");
+            const auto profiles = ControllerProfiles();
+            for (std::size_t p = 0; p < profiles.size(); ++p) {
+                if (chosen == nullptr || std::string_view{chosen} == profiles[p].key) {
+                    LOG_INFO(Core_Vr, "Move buttons on {}: {}", profiles[p].name, DescribeBindings(p));
+                }
+            }
         }
-        bind(act_lower, "/user/hand/left/input/x/click");
-        bind(act_upper, "/user/hand/left/input/y/click");
-        bind(act_lower, "/user/hand/right/input/a/click");
-        bind(act_upper, "/user/hand/right/input/b/click");
-        bind(act_menu, "/user/hand/left/input/menu/click");
 
         // The wand against the controller. The game turns the tracker's Move orientation as
         // (x, y, z, w) -> (x, -z, y, w) (see the notes in the kit) and a wand that was pointed
@@ -916,7 +1142,7 @@ struct OpenXrHost::Impl {
             const float pitch = std::clamp(EnvFloat("SHADPS4_QUEST_MOVE_PITCH", 35.0f), -90.0f, 90.0f);
             const float half = pitch * 0.017453292f * 0.5f;
             quest_aim_tilt = Quat{std::sin(half), 0.0f, 0.0f, std::cos(half)};
-            LOG_INFO(Core_Vr, "Quest controllers as Move wands: muzzle raised by {:.0f} degrees",
+            LOG_INFO(Core_Vr, "VR controllers as Move wands: muzzle raised by {:.0f} degrees",
                      pitch);
         }
         quest_scale = std::clamp(EnvFloat("SHADPS4_QUEST_MOVE_SCALE", quest_scale), 0.05f, 3.0f);
@@ -924,7 +1150,7 @@ struct OpenXrHost::Impl {
         // SHADPS4_QUEST_MOVE_FOLLOW: seconds the reach and turn anchor takes to follow the head
         // (0 = the head itself: the hands then move with the head).
         quest_follow = std::clamp(EnvFloat("SHADPS4_QUEST_MOVE_FOLLOW", quest_follow), 0.0f, 120.0f);
-        LOG_INFO(Core_Vr, "Quest controllers as Move wands: reach x{:.2f}, turn x{:.2f}",
+        LOG_INFO(Core_Vr, "VR controllers as Move wands: reach x{:.2f}, turn x{:.2f}",
                  quest_scale, quest_turn);
         quest_actions = true;
     }
@@ -953,12 +1179,6 @@ struct OpenXrHost::Impl {
             }
             return 0.0f;
         };
-        const auto read_bool = [&](XrAction action, int xr_hand) {
-            const XrActionStateGetInfo get = get_info(action, xr_hand);
-            XrActionStateBoolean state{XR_TYPE_ACTION_STATE_BOOLEAN};
-            return XR_SUCCEEDED(xrGetActionStateBoolean(session, &get, &state)) &&
-                   state.isActive == XR_TRUE && state.currentState == XR_TRUE;
-        };
         const auto read_stick = [&](int xr_hand) {
             const XrActionStateGetInfo get = get_info(act_stick, xr_hand);
             XrActionStateVector2f state{XR_TYPE_ACTION_STATE_VECTOR2F};
@@ -969,8 +1189,56 @@ struct OpenXrHost::Impl {
             return XrVector2f{0.0f, 0.0f};
         };
 
-        // The left controller's menu button starts, for both wands.
-        const bool menu = actions_synced && read_bool(act_menu, 0);
+        // Which kind of controllers the runtime says the player holds (it picks one of the
+        // bindings offered for each kind), looked at now and then.
+        if (actions_synced && profile_check_frames-- == 0) {
+            profile_check_frames = 90;
+            for (int xr_hand = 1; xr_hand >= 0; --xr_hand) {
+                XrInteractionProfileState held{XR_TYPE_INTERACTION_PROFILE_STATE};
+                if (XR_FAILED(xrGetCurrentInteractionProfile(session, hand_paths[xr_hand], &held)) ||
+                    held.interactionProfile == XR_NULL_PATH) {
+                    continue;
+                }
+                for (std::size_t p = 0; p < ControllerProfiles().size(); ++p) {
+                    if (profile_paths[p] == held.interactionProfile) {
+                        active_profile = p;
+                    }
+                }
+                break;
+            }
+            if (active_profile != logged_profile) {
+                logged_profile = active_profile;
+                LOG_INFO(Core_Vr, "The VR controllers are read as {}: {}",
+                         ControllerProfiles()[active_profile].name,
+                         DescribeBindings(active_profile));
+            }
+        }
+        const auto& bindings = wand_bindings[active_profile];
+        // How far a Move button is pressed on a wand, 0 to 1. An input of one hand only (a
+        // left menu button) counts for both wands.
+        const auto button_value = [&](u32 b, int wand_index) {
+            const WandInput* input = bindings[b];
+            if (input == nullptr) {
+                return 0.0f;
+            }
+            int xr_hand = wand_index == 0 ? 1 : 0;
+            if (input->kind != InputKind::Path) {
+                const XrVector2f stick = read_stick(xr_hand);
+                return (input->kind == InputKind::StickUp ? stick.y > 0.7f : stick.y < -0.7f)
+                           ? 1.0f
+                           : 0.0f;
+            }
+            if (input->left == nullptr) {
+                xr_hand = 1;
+            } else if (input->right == nullptr) {
+                xr_hand = 0;
+            }
+            return read_float(act_buttons[b], xr_hand);
+        };
+
+        // START (by default the left controller's menu button) starts, for both wands.
+        const bool menu = actions_synced &&
+                          (button_value(BtnStart, 0) > 0.5f || button_value(BtnStart, 1) > 0.5f);
         // Held for a second it also resets the view (where the player sits and faces), as
         // OPTIONS does on the gamepad.
         if (menu) {
@@ -981,7 +1249,7 @@ struct OpenXrHost::Impl {
                 quest_menu_since = now;
             } else if (!quest_menu_fired && now - quest_menu_since > std::chrono::seconds{1}) {
                 quest_menu_fired = true;
-                LOG_INFO(Core_Vr, "Left menu button held: view reset");
+                LOG_INFO(Core_Vr, "START held: view reset");
                 runtime.RequestRecenter();
                 quest_anchor_set = false;
             }
@@ -1037,15 +1305,14 @@ struct OpenXrHost::Impl {
                              pose_state.isActive == XR_TRUE;
             if (wand.connected != quest_wand_seen[wand_index]) {
                 quest_wand_seen[wand_index] = wand.connected;
-                LOG_INFO(Core_Vr, "Quest controller of the {} hand (Move wand {}): {}",
+                LOG_INFO(Core_Vr, "VR controller of the {} hand (Move wand {}): {}",
                          xr_hand == 1 ? "right" : "left", wand_index,
                          wand.connected ? "active" : "not active");
             }
 
-            // Buttons: a fixed layout (see the "Controllers" notes in the README).
-            const float trigger = read_float(act_trigger, xr_hand);
-            const float squeeze = read_float(act_squeeze, xr_hand);
-            const XrVector2f stick = read_stick(xr_hand);
+            // Buttons: as bound for this kind of controller (the launcher's Buttons window).
+            const float trigger = button_value(BtnT, wand_index);
+            const float squeeze = button_value(BtnMove, wand_index);
             // Presses with some slack, so a trigger held half way does not flicker.
             bool& trigger_down = quest_trigger_down[wand_index];
             trigger_down = trigger_down ? trigger > 0.35f : trigger > 0.6f;
@@ -1058,20 +1325,10 @@ struct OpenXrHost::Impl {
             if (squeeze_down) {
                 buttons |= QuestMove::MOVE;
             }
-            if (read_bool(act_lower, xr_hand)) {
-                buttons |= QuestMove::CROSS;
-            }
-            if (read_bool(act_upper, xr_hand)) {
-                buttons |= QuestMove::CIRCLE;
-            }
-            if (read_bool(act_stick_click, xr_hand)) {
-                buttons |= QuestMove::SQUARE;
-            }
-            if (stick.y > 0.7f) {
-                buttons |= QuestMove::TRIANGLE;
-            }
-            if (stick.y < -0.7f) {
-                buttons |= QuestMove::SELECT;
+            for (u32 b = BtnCross; b < BtnStart; ++b) {
+                if (button_value(b, wand_index) > 0.5f) {
+                    buttons |= MoveButtonBits[b];
+                }
             }
             if (menu) {
                 buttons |= QuestMove::START;
@@ -1693,9 +1950,15 @@ struct OpenXrHost::Impl {
             std::max(tangent(eye_views[0].fov.angleUp), tangent(eye_views[1].fov.angleUp)),
             std::max(tangent(eye_views[0].fov.angleDown), tangent(eye_views[1].fov.angleDown)),
         };
-        if (seen.tan_out > 0.1f && seen.tan_out < 10.0f && seen.tan_in > 0.1f &&
-            seen.tan_in < 10.0f && seen.tan_top > 0.1f && seen.tan_top < 10.0f &&
-            seen.tan_bottom > 0.1f && seen.tan_bottom < 10.0f && ++fov_samples % 600 == 1) {
+        const bool seen_valid = seen.tan_out > 0.1f && seen.tan_out < 10.0f && seen.tan_in > 0.1f &&
+                                seen.tan_in < 10.0f && seen.tan_top > 0.1f &&
+                                seen.tan_top < 10.0f && seen.tan_bottom > 0.1f &&
+                                seen.tan_bottom < 10.0f;
+        if (seen_valid) {
+            headset_seen = seen;
+            headset_seen_valid = true;
+        }
+        if (seen_valid && ++fov_samples % 600 == 1) {
             runtime.NoteHeadsetFov(seen);
         }
         if ((view_state.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0) {
@@ -1892,6 +2155,65 @@ struct OpenXrHost::Impl {
         return latest;
     }
 
+    /// Which part of each eye's picture is worth handing over. The title draws one picture with
+    /// a circle for each eye, and each eye's layer is the whole of it: the other eye's circle,
+    /// well over half of the picture's width, lies where that eye never looks. Only what the
+    /// headset shows, plus a margin for the head turning before the next picture (the
+    /// compositor turns the last one to follow), is copied, so the same pixels can be handed
+    /// over at full size for less than half of the picture made smaller.
+    /// SHADPS4_VR_CROP=0: hand over the whole picture (as before 0.5.0);
+    /// SHADPS4_VR_CROP_MARGIN=<degrees>: the margin to every side, 12 by default.
+    CropArea Crop(const Fov& drawn, u32 eye_width, u32 eye_height) const {
+        static const bool crop_on = EnvFlag("SHADPS4_VR_CROP", true);
+        static const float margin =
+            std::clamp(EnvFloat("SHADPS4_VR_CROP_MARGIN", 12.0f), 0.0f, 60.0f) * 0.01745329f;
+        CropArea area;
+        if (!crop_on || !headset_seen_valid || eye_width < 64 || eye_height < 64) {
+            return area;
+        }
+        const float wide = drawn.tan_out + drawn.tan_in;
+        const float tall = drawn.tan_top + drawn.tan_bottom;
+        if (!(wide > 0.1f) || !(tall > 0.1f)) {
+            return area;
+        }
+        const auto wanted = [](float headset_tan, float drawn_tan) {
+            const float angle = std::min(std::atan(headset_tan) + margin, 1.55f);
+            return std::min(std::tan(angle), drawn_tan);
+        };
+        const float out = wanted(headset_seen.tan_out, drawn.tan_out);
+        const float in = wanted(headset_seen.tan_in, drawn.tan_in);
+        const float up = wanted(headset_seen.tan_top, drawn.tan_top);
+        const float down = wanted(headset_seen.tan_bottom, drawn.tan_bottom);
+        // The left eye's copy runs from its outer side (left) to its inner side, and from the
+        // top down; tangents grow evenly across the pixels.
+        const float px_per_tan_x = static_cast<float>(eye_width) / wide;
+        const float px_per_tan_y = static_cast<float>(eye_height) / tall;
+        u32 x0 = static_cast<u32>(std::floor((drawn.tan_out - out) * px_per_tan_x));
+        u32 x1 = static_cast<u32>(std::ceil((drawn.tan_out + in) * px_per_tan_x));
+        u32 y0 = static_cast<u32>(std::floor((drawn.tan_top - up) * px_per_tan_y));
+        u32 y1 = static_cast<u32>(std::ceil((drawn.tan_top + down) * px_per_tan_y));
+        x1 = std::min(x1, eye_width);
+        y1 = std::min(y1, eye_height);
+        if (x1 <= x0 + 32 || y1 <= y0 + 32) {
+            return area;
+        }
+        // Not worth it when nearly everything would be handed over anyway.
+        if ((x1 - x0) * 10 >= eye_width * 9 && (y1 - y0) * 10 >= eye_height * 9) {
+            return area;
+        }
+        area.active = true;
+        area.x0 = x0;
+        area.x1 = x1;
+        area.y0 = y0;
+        area.y1 = y1;
+        // The edges' own tangents, after rounding to whole pixels.
+        area.tan_out = drawn.tan_out - static_cast<float>(x0) / px_per_tan_x;
+        area.tan_in = static_cast<float>(x1) / px_per_tan_x - drawn.tan_out;
+        area.tan_up = drawn.tan_top - static_cast<float>(y0) / px_per_tan_y;
+        area.tan_down = static_cast<float>(y1) / px_per_tan_y - drawn.tan_top;
+        return area;
+    }
+
     bool EnsureSwapchain(u32 width, u32 height) {
         // SHADPS4_VR_LAYER_SCALE=<0.25 to 1>: hands the runtime pictures this fraction of the
         // size they are drawn at, scaled down here (with a linear filter: at 0.5 each pixel is
@@ -1989,11 +2311,13 @@ struct OpenXrHost::Impl {
         vk::Image source;
         u32 width;
         u32 height;
+        Fov drawn_fov;
         {
             std::scoped_lock lock{slot_mutex};
             source = slots[index].image;
             width = slots[index].width;
             height = slots[index].height;
+            drawn_fov = slots[index].info.fov;
         }
         // A title with nothing to show hands over a black picture of a pixel an eye (this one
         // does while it waits for the headset to be put back on). That is not worth images of
@@ -2003,7 +2327,25 @@ struct OpenXrHost::Impl {
             blank = true;
             return false;
         }
-        if (!EnsureSwapchain(width, height)) {
+        // The frame holds one copy of the title's picture for each eye, side by side.
+        const CropArea crop = Crop(drawn_fov, width / 2, height);
+        if (crop.active != shown_crop.active || crop.x0 != shown_crop.x0 ||
+            crop.x1 != shown_crop.x1 || crop.y0 != shown_crop.y0 || crop.y1 != shown_crop.y1) {
+            if (crop.active) {
+                LOG_INFO(Core_Vr,
+                         "Each eye hands over {}x{} of its {}x{} picture: what the headset shows "
+                         "and a margin, {:.1f}/{:.1f}/{:.1f}/{:.1f} degrees (out, in, up, down)",
+                         crop.x1 - crop.x0, crop.y1 - crop.y0, width / 2, height,
+                         std::atan(crop.tan_out) * 57.29578f, std::atan(crop.tan_in) * 57.29578f,
+                         std::atan(crop.tan_up) * 57.29578f, std::atan(crop.tan_down) * 57.29578f);
+            } else {
+                LOG_INFO(Core_Vr, "Each eye hands over the whole of its {}x{} picture", width / 2,
+                         height);
+            }
+        }
+        const u32 out_width = crop.active ? 2 * (crop.x1 - crop.x0) : width;
+        const u32 out_height = crop.active ? crop.y1 - crop.y0 : height;
+        if (!EnsureSwapchain(out_width, out_height)) {
             return false;
         }
 
@@ -2079,7 +2421,31 @@ struct OpenXrHost::Impl {
             .imageMemoryBarrierCount = static_cast<u32>(before.size()),
             .pImageMemoryBarriers = before.data(),
         });
-        if (swapchain_format == FrameFormat && swapchain_width == width &&
+        if (crop.active) {
+            // The left eye's part from the left copy, the right eye's (mirrored: its outer side
+            // is on the right) from the right copy, each into its half.
+            const u32 half = width / 2;
+            const u32 crop_w = crop.x1 - crop.x0;
+            const s32 out_half = static_cast<s32>(swapchain_width / 2);
+            std::array<vk::ImageBlit, 2> regions{};
+            for (u32 eye = 0; eye < 2; ++eye) {
+                const u32 x0 = eye == 0 ? crop.x0 : half + (half - crop.x1);
+                regions[eye] = vk::ImageBlit{
+                    .srcSubresource = ColorLayer,
+                    .srcOffsets = std::array{vk::Offset3D{static_cast<s32>(x0),
+                                                          static_cast<s32>(crop.y0), 0},
+                                             vk::Offset3D{static_cast<s32>(x0 + crop_w),
+                                                          static_cast<s32>(crop.y1), 1}},
+                    .dstSubresource = ColorLayer,
+                    .dstOffsets = std::array{vk::Offset3D{static_cast<s32>(eye) * out_half, 0, 0},
+                                             vk::Offset3D{(static_cast<s32>(eye) + 1) * out_half,
+                                                          static_cast<s32>(swapchain_height),
+                                                          1}},
+                };
+            }
+            cmdbuf.blitImage(source, vk::ImageLayout::eTransferSrcOptimal, target,
+                             vk::ImageLayout::eTransferDstOptimal, regions, vk::Filter::eLinear);
+        } else if (swapchain_format == FrameFormat && swapchain_width == width &&
             swapchain_height == height) {
             cmdbuf.copyImage(source, vk::ImageLayout::eTransferSrcOptimal, target,
                              vk::ImageLayout::eTransferDstOptimal,
@@ -2154,6 +2520,9 @@ struct OpenXrHost::Impl {
             NoteFrameFailure("xrReleaseSwapchainImage", result);
             return false;
         }
+        if (submitted) {
+            shown_crop = crop;
+        }
         return submitted;
     }
 
@@ -2172,10 +2541,11 @@ struct OpenXrHost::Impl {
         } else {
             orientation = {0.0f, 0.0f, 0.0f, 1.0f};
         }
-        const float angle_out = std::atan(shown.fov.tan_out);
-        const float angle_in = std::atan(shown.fov.tan_in);
-        const float angle_up = std::atan(shown.fov.tan_top);
-        const float angle_down = std::atan(shown.fov.tan_bottom);
+        const float angle_out = std::atan(shown_crop.active ? shown_crop.tan_out : shown.fov.tan_out);
+        const float angle_in = std::atan(shown_crop.active ? shown_crop.tan_in : shown.fov.tan_in);
+        const float angle_up = std::atan(shown_crop.active ? shown_crop.tan_up : shown.fov.tan_top);
+        const float angle_down =
+            std::atan(shown_crop.active ? shown_crop.tan_down : shown.fov.tan_bottom);
         const auto eye_width = static_cast<int32_t>(swapchain_width / 2);
 
         for (int eye = 0; eye < 2; ++eye) {

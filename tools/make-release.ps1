@@ -102,12 +102,12 @@ $defaults = @(
     "",
     "# What this release starts with (the window at the start changes and saves them):",
     "eye_width=2304",
-    "layer_scale=50",
+    "layer_scale=100",
     "fps=60",
     "target_fps=60",
     "aniso=16",
     "fxaa=0.65",
-    "fov=105",
+    "fov=120",
     "mask=0.9",
     "fov_of=psvr",
     "menu=1"
@@ -149,8 +149,10 @@ through Virtual Desktop.
 5. In the game's own start-up question, choose the DualShock controller if you play with the
    DualSense, or the Move controllers if you play with the Quest controllers.
 
-What is new in $Version (the whole list is in CHANGELOG.md): the Quest controllers playing as
-the game's Move wands are now part of the free release (no licence needed). From 0.4.5: the pig room's streaks and the flashlight's shadows are
+What is new in $Version (the whole list is in CHANGELOG.md): a much sharper picture in the
+headset (only what the headset shows is sent, at full size), any VR controllers as the game's Move
+wands with a choice of buttons, a headset choice that sets the field of view (PlayStation VR2
+included). From 0.5.0: the Move controllers are part of the free release. From 0.4.5: the pig room's streaks and the flashlight's shadows are
 fixed. From 0.4.2: a new start-up window with Low, Medium and High buttons and a choice of what
 the monitor shows, and higher default quality. From 0.4.0: large picture sizes (eye_width 2688 and
 2880) no longer run the PC out of memory (give Windows a big page file, see the README), a

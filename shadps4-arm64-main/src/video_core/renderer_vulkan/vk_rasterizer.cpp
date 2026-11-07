@@ -721,7 +721,8 @@ void Rasterizer::DispatchDirect() {
                 return;
             }
             static std::atomic<u32> fallthrough{0};
-            if (std::getenv("SHADPS4_DBG_TEX_AUDIT") != nullptr && fallthrough.fetch_add(1) < 40) {
+            static const bool fallthrough_audit = std::getenv("SHADPS4_DBG_TEX_AUDIT") != nullptr;
+            if (fallthrough_audit && fallthrough.fetch_add(1) < 40) {
                 LOG_WARNING(Render_Vulkan,
                             "TEXAUDIT: copy kernel NOT done by the HLE: src={:#x} dst={:#x} "
                             "bytes={:#x}",

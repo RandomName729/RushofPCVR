@@ -7,7 +7,7 @@ param([string]$SettingsFile = "", [switch]$NoMenu)
 $ErrorActionPreference = "Continue"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Split-Path -Parent $here
-Set-Location $here
+Set-Location -LiteralPath $here
 if ($SettingsFile -eq "") { $SettingsFile = Join-Path $here "settings.txt" }
 
 function Say([string]$text, [string]$color = "Gray") { Write-Host $text -ForegroundColor $color }
@@ -16,8 +16,8 @@ function Say([string]$text, [string]$color = "Gray") { Write-Host $text -Foregro
 function Read-Settings {
     $script:settings = [ordered]@{}
     $script:extraEnv = @()
-    if (Test-Path $SettingsFile) {
-        foreach ($line in Get-Content $SettingsFile) {
+    if (Test-Path -LiteralPath $SettingsFile) {
+        foreach ($line in Get-Content -LiteralPath $SettingsFile) {
             $line = $line.Trim()
             if ($line -eq "" -or $line.StartsWith("#")) { continue }
             $at = $line.IndexOf("=")
@@ -35,7 +35,7 @@ function Setting([string]$key, [string]$default = "") {
 # Writes key=value into the settings file: in place of the line that sets it, or at the end.
 function Save-Setting([string]$key, [string]$value) {
     $lines = @()
-    if (Test-Path $SettingsFile) { $lines = @(Get-Content $SettingsFile) }
+    if (Test-Path -LiteralPath $SettingsFile) { $lines = @(Get-Content -LiteralPath $SettingsFile) }
     $done = $false
     for ($i = 0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -match ("^\s*" + [regex]::Escape($key) + "\s*=")) {
@@ -44,16 +44,141 @@ function Save-Setting([string]$key, [string]$value) {
         }
     }
     if (-not $done) { $lines += "$key=$value" }
-    Set-Content -Path $SettingsFile -Value $lines -Encoding UTF8
+    Set-Content -LiteralPath $SettingsFile -Value $lines -Encoding UTF8
 }
 Read-Settings
 
-# Since 0.5.0 there is one edition: the Quest controllers playing as PlayStation Move wands are
+# Since 0.5.0 there is one edition: the VR controllers playing as PlayStation Move wands are
 # part of it for everyone (the "Controllers" card), with no licence file. (The variable keeps its
 # old name; it is always true.)
 $motionEdition = $true
+
+# The kinds of VR controllers that can play as Move wands, what of each can stand in for a Move
+# button, and what does by default. KEEP THE SAME as ControllerProfiles() in
+# shadps4-arm64-main\src\core\vr\openxr_host.cpp (the ids are what the emulator is told).
+# Settings: move_controller=<Key>, and move_bind_<Key>_<button>=<input id, or none> for the
+# player's own choices (the Buttons window writes them).
+$moveButtonKeys = @("T", "MOVE", "CROSS", "CIRCLE", "SQUARE", "TRIANGLE", "SELECT", "START")
+$moveButtonTitles = @("T (trigger)", "MOVE (big front button)", "Cross", "Circle", "Square",
+                      "Triangle", "Select", "Start (held 1 s: reset view)")
+$stickInputs = @(@("stick_click", "Stick press"), @("stick_up", "Stick up"), @("stick_down", "Stick down"))
+$controllerTypes = @(
+    @{ Key = "touch"; Name = "Meta Quest (and most others)"
+       Inputs = @(@("trigger", "Trigger"), @("grip", "Grip"), @("lower", "A / X"), @("upper", "B / Y")) + $stickInputs + @(,@("menu", "Left menu button"))
+       Defaults = @("trigger", "grip", "lower", "upper", "stick_click", "stick_up", "stick_down", "menu") },
+    # The PS VR2 Sense controllers (on a PC through Sony's adapter and SteamVR) have no OpenXR
+    # profile of their own: SteamVR offers them to the game as Touch controllers, so the emulator
+    # is told "touch" (Emu) and only the names here are the Sense buttons'.
+    @{ Key = "psvr2"; Emu = "touch"; Name = "PlayStation VR2 Sense"
+       Inputs = @(@("trigger", "R2 / L2 trigger"), @("grip", "R1 / L1 grip"), @("lower", "Cross / Square"), @("upper", "Circle / Triangle")) + $stickInputs + @(,@("menu", "Create button (left)"))
+       Defaults = @("trigger", "grip", "lower", "upper", "stick_click", "stick_up", "stick_down", "menu") },
+    @{ Key = "index"; Name = "Valve Index"
+       Inputs = @(@("trigger", "Trigger"), @("grip", "Grip (squeeze)"), @("lower", "A"), @("upper", "B")) + $stickInputs + @(@("pad", "Trackpad press"), @("menu", "Left trackpad press"))
+       Defaults = @("trigger", "grip", "lower", "upper", "stick_click", "stick_up", "stick_down", "menu") },
+    @{ Key = "wmr"; Name = "Windows Mixed Reality (HP Reverb and others)"
+       Inputs = @(@("trigger", "Trigger"), @("grip", "Grip"), @("pad", "Trackpad press")) + $stickInputs + @(@("menu", "Left menu button"), @("menu_right", "Right menu button"))
+       Defaults = @("trigger", "grip", "pad", "menu_right", "stick_click", "stick_up", "stick_down", "menu") },
+    @{ Key = "vive"; Name = "HTC Vive wands"
+       Inputs = @(@("trigger", "Trigger"), @("grip", "Grip"), @("pad", "Trackpad press"), @("stick_up", "Trackpad up (touch)"), @("stick_down", "Trackpad down (touch)"), @("menu", "Left menu button"), @("menu_right", "Right menu button"))
+       Defaults = @("trigger", "grip", "menu_right", "none", "pad", "stick_up", "stick_down", "menu") },
+    @{ Key = "simple"; Name = "Other (basic controllers)"
+       Inputs = @(@("trigger", "Select button"), @("menu", "Left menu button"), @("menu_right", "Right menu button"))
+       Defaults = @("trigger", "none", "none", "none", "none", "none", "none", "menu") }
+)
+# The headsets the start-up window offers: the field of view (percent of a PlayStation VR's, as
+# the fov setting) and the controller type that suit each. 120 for all of them, the default that
+# was chosen on a Quest 3 by testing; the others are untested.
+$headsetModels = @(
+    @{ Key = "quest3"; Name = "Meta Quest 3"; Fov = 120; Controller = "touch" },
+    @{ Key = "quest3s"; Name = "Meta Quest 3S"; Fov = 120; Controller = "touch" },
+    @{ Key = "quest2"; Name = "Meta Quest 2"; Fov = 120; Controller = "touch" },
+    @{ Key = "questpro"; Name = "Meta Quest Pro"; Fov = 120; Controller = "touch" },
+    @{ Key = "pico4"; Name = "Pico 4 / 4 Ultra"; Fov = 120; Controller = "touch" },
+    @{ Key = "psvr2"; Name = "PlayStation VR2 (PC adapter, SteamVR)"; Fov = 120; Controller = "psvr2" },
+    @{ Key = "index"; Name = "Valve Index"; Fov = 120; Controller = "index" },
+    @{ Key = "vive"; Name = "HTC Vive / Vive Pro"; Fov = 120; Controller = "vive" },
+    @{ Key = "wmr"; Name = "Windows Mixed Reality (HP Reverb G2 and others)"; Fov = 120; Controller = "wmr" },
+    @{ Key = "other"; Name = "Other headset"; Fov = 120; Controller = "touch" }
+)
+# The index of the chosen kind of controller in $controllerTypes.
+function Get-ControllerType {
+    $key = Setting "move_controller" "touch"
+    for ($i = 0; $i -lt $controllerTypes.Count; $i++) {
+        if ($controllerTypes[$i].Key -eq $key) { return $i }
+    }
+    return 0
+}
+# What each Move button is bound to on that kind (8 input ids): the player's choices where there
+# are any and they still exist, the defaults otherwise.
+function Get-MoveBinds([int]$type) {
+    $kind = $controllerTypes[$type]
+    $known = @("none") + @($kind.Inputs | ForEach-Object { $_[0] })
+    $binds = @()
+    for ($b = 0; $b -lt $moveButtonKeys.Count; $b++) {
+        $value = Setting ("move_bind_" + $kind.Key + "_" + $moveButtonKeys[$b].ToLower()) ""
+        if ($value -eq "" -or $known -notcontains $value) { $value = $kind.Defaults[$b] }
+        $binds += $value
+    }
+    return ,$binds
+}
+
+# The Buttons window: a dropdown for each Move button, for one kind of controller. Gives the 8
+# input ids back, or $null when cancelled.
+function Show-ButtonsWindow($owner, [int]$type, [string[]]$current) {
+    $kind = $controllerTypes[$type]
+    $ids = @("none") + @($kind.Inputs | ForEach-Object { $_[0] })
+    $names = @("Nothing") + @($kind.Inputs | ForEach-Object { $_[1] })
+    $dialog = New-Object RushUi.Window
+    $dialog.Text = "Buttons"
+    $dialog.ClientSize = New-Object System.Drawing.Size(520, 478)
+    $dialog.StartPosition = "CenterParent"
+    $dialog.TopMost = $true
+    $dialog.BackColor = [RushUi.Theme]::Back
+    $dialog.ForeColor = [RushUi.Theme]::Text
+    $dialog.Font = New-Object System.Drawing.Font("Segoe UI", 9.5)
+    $card = New-Card ("Move buttons: " + $kind.Name) 16 16 488 388
+    $dialog.Controls.Add($card)
+    $boxes = @()
+    for ($b = 0; $b -lt $moveButtonKeys.Count; $b++) {
+        $y = 50 + $b * 41
+        [void](New-Label $card $moveButtonTitles[$b] 18 ($y + 8) 196 20 ([RushUi.Theme]::Dim) 9)
+        $selected = [array]::IndexOf($ids, $current[$b])
+        if ($selected -lt 0) { $selected = 0 }
+        $boxes += (New-Dropdown $card $names $selected 214 $y 256)
+    }
+    $defaults = New-Object RushUi.FlatButton
+    $defaults.Text = "Defaults"
+    $defaults.SetBounds(16, 420, 120, 40)
+    $defaults.Add_Click({
+        for ($b = 0; $b -lt $moveButtonKeys.Count; $b++) {
+            $boxes[$b].SelectedIndex = [math]::Max(0, [array]::IndexOf($ids, $kind.Defaults[$b]))
+        }
+    })
+    $dialog.Controls.Add($defaults)
+    $cancel = New-Object RushUi.FlatButton
+    $cancel.Text = "Cancel"
+    $cancel.SetBounds(268, 420, 110, 40)
+    $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $dialog.Controls.Add($cancel)
+    $ok = New-Object RushUi.FlatButton
+    $ok.Text = "OK"
+    $ok.Primary = $true
+    $ok.SetBounds(390, 420, 114, 40)
+    $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $dialog.Controls.Add($ok)
+    $dialog.AcceptButton = $ok
+    $dialog.CancelButton = $cancel
+    $result = $dialog.ShowDialog($owner)
+    $chosen = $null
+    if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+        $chosen = @($boxes | ForEach-Object { $ids[$_.SelectedIndex] })
+    }
+    $dialog.Dispose()
+    if ($null -eq $chosen) { return $null }
+    return ,$chosen
+}
 # The version shown in the window's banner (the release scripts check that it is the release's).
-$launcherVersion = "0.5.0"
+$launcherVersion = "0.5.5"
 
 # PS4 Pro mode ("neo_mode" in user\config.json) is always switched OFF now (see the call just
 # before the emulator starts): with it on, the game's flashlight shadows split into extra lines
@@ -449,8 +574,10 @@ namespace RushUi
                 pen.LineJoin = LineJoin.Round;
                 g.DrawLines(pen, new PointF[] { new PointF(cx - 4f, cy - 2f), new PointF(cx, cy + 2f), new PointF(cx + 4f, cy - 2f) });
             }
+            Theme.Fade(g, this);
         }
 
+        protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
         protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; Invalidate(); }
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; Invalidate(); }
         protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
@@ -1190,7 +1317,7 @@ function Show-Box([string]$text, [string]$buttons = "OK", [string]$icon = "Infor
 }
 
 # True when a PlayStation controller (DualSense, DualShock 4) is connected to this PC. The game
-# prefers it over the Quest controllers, so with one plugged in the Quest controllers do nothing.
+# prefers it over the VR controllers, so with one plugged in the VR controllers do nothing.
 function Test-PlayStationPad {
     try {
         $found = @(Get-PnpDevice -PresentOnly -ErrorAction Stop | Where-Object {
@@ -1703,6 +1830,8 @@ function Show-MenuModern {
         $cText = [RushUi.Theme]::Text
         $cDim = [RushUi.Theme]::Dim
         $cAccent = [RushUi.Theme]::Accent
+        # What is switched off reads darker still than the usual dim text.
+        $cOff = [RushUi.Theme]::Mix([RushUi.Theme]::Dim, [RushUi.Theme]::Card, 0.55)
 
         # The presets of the picture quality (Low, Medium, High): the width of an eye, the textures,
         # the edge smoothing, the sharpening, and the size of the picture handed to the headset.
@@ -1711,7 +1840,7 @@ function Show-MenuModern {
         $presetAniso = @("4", "16", "16")
         $presetFxaa = @("0", "0.65", "0.65")
         $presetSharp = @("0", "0.3", "0.3")
-        $presetLayer = @("75", "50", "50")
+        $presetLayer = @("100", "100", "100")
         $presetButtons = @()
         # Lights the button of the preset the choices are at (none, when they are at none of them).
         $markPresets = {
@@ -1772,27 +1901,36 @@ function Show-MenuModern {
         $tips.SetToolTip($minimizeButton, "Minimize")
         $tips.SetToolTip($closeButton, "Close")
 
-        # Row 1: the headset connection, and the frame rate. (y 92, 150 high)
-        $headset = New-Card "Headset" 24 92 332 150
+        # Row 1: the headset (which one, and the connection), and the frame rate. (y 92, 180 high)
+        $headset = New-Card "Headset" 24 92 332 180
         $form.Controls.Add($headset)
-        [void](New-Label $headset "Connection (OpenXR runtime)" 18 50 296 20 $cDim 9)
+        # Which headset: picking one sets the field of view and the controller type to what suits
+        # it; both can still be changed by themselves afterwards (headset_model).
+        [void](New-Label $headset "Your headset" 18 50 296 20 $cDim 9)
+        $headsetIndex = 0
+        $headsetKey = Setting "headset_model" "quest3"
+        for ($h = 0; $h -lt $headsetModels.Count; $h++) { if ($headsetModels[$h].Key -eq $headsetKey) { $headsetIndex = $h } }
+        $headsetBox = New-Dropdown $headset @($headsetModels | ForEach-Object { $_.Name }) $headsetIndex 18 72 296
+        $tips.SetToolTip($headsetBox, "Sets the field of view and the controller type to what suits this headset. You can still change either of them yourself afterwards. Only the Meta Quest 3 has been tuned by testing; the others are starting points.")
+        [void](New-Label $headset "Connection (OpenXR runtime)" 18 112 296 20 $cDim 9)
         $runtimeNames = @("Automatic (as the PC has it set up)", "Virtual Desktop", "SteamVR")
         $runtimeKeys = @("pc", "virtualdesktop", "steamvr")
         $index = [array]::IndexOf($runtimeKeys, (Setting "runtime" "pc"))
         if ($index -lt 0) { $index = 0 }
-        $runtimeBox = New-Dropdown $headset $runtimeNames $index 18 72 296
-        $runtimeText = New-Label $headset "" 18 112 296 32 $cDim 8.5
+        $runtimeBox = New-Dropdown $headset $runtimeNames $index 18 134 296
+        # (What each connection does is in its tooltip, to keep the card short.)
         $updateRuntime = {
-            $runtimeText.Text = switch ($runtimeBox.SelectedIndex) {
+            $runtimeText = switch ($runtimeBox.SelectedIndex) {
                 1 { "Starts Virtual Desktop's streamer if needed. In the headset, connect it to this PC." }
-                2 { "Starts SteamVR if needed: connect the headset to it first. Not tested with this game yet." }
+                2 { "Starts SteamVR if needed: connect the headset to it first." }
                 default { "Uses the runtime the PC has set (Virtual Desktop's streamer sets itself when it starts)." }
             }
+            $tips.SetToolTip($runtimeBox, $runtimeText)
         }
         $runtimeBox.Add_SelectedIndexChanged($updateRuntime)
         & $updateRuntime
 
-        $rate = New-Card "Frame rate" 380 92 332 150
+        $rate = New-Card "Frame rate" 380 92 332 180
         $form.Controls.Add($rate)
         $targetKeys = @("0", "30", "35", "40", "45", "50", "60", "90", "120")
         $targetNames = @("Original timing (the game's own pace)", "30 a second", "35 a second", "40 a second (steady at 80 Hz)", "45 a second (steady at 90 Hz)", "50 a second", "60 a second (recommended, 120 Hz)", "90 a second (experimental)", "120 a second (experimental)")
@@ -1801,13 +1939,13 @@ function Show-MenuModern {
         [void](New-Label $rate "60 suits Virtual Desktop at 120 Hz (45 at 90 Hz, 40 at 80 Hz). Lower is steadier on a slower PC." 18 112 296 32 $cDim 8.5)
         $tips.SetToolTip($targetBox, "The emulator holds the game to this rate. 60 is the game's own and looks smoothest with Virtual Desktop's frame rate at 120 (Streaming tab); at 90 or 80 use 45 or 40. Lower is steadier on a slower PC. 90 and 120 are experimental: the game was made for 60, so check that its captions stay with the voice; the PC may not reach them.")
 
-        # Row 2: the picture, the two sliders side by side. (y 254, 148 high)
-        $picture = New-Card "Picture" 24 254 688 148
+        # Row 2: the picture, the two sliders side by side. (y 284, 148 high)
+        $picture = New-Card "Picture" 24 284 688 148
         $form.Controls.Add($picture)
         [void](New-Label $picture "Quality" 290 11 120 20 $cDim 8.5 "Segoe UI" "TopRight")
         $presetTips = @(
-            "The lightest of the three, for a PC that struggles: 1536 an eye, 4x textures, no edge smoothing or sharpening, and the picture to the headset at 75%. For a lighter one still, lower the resolution slider by hand (1152 is the console's own).",
-            "The default: 2304 an eye, 16x textures, normal edge smoothing and sharpening, and the picture to the headset at 50%, which Virtual Desktop then shows smoothly. It wants a good graphics card.",
+            "The lightest of the three, for a PC that struggles: 1536 an eye, 4x textures, no edge smoothing or sharpening. For a lighter one still, lower the resolution slider by hand (1152 is the console's own).",
+            "The default: 2304 an eye, 16x textures, normal edge smoothing and sharpening. It wants a good graphics card.",
             "The sharpest and least pixelated: 2880 an eye, the largest. It needs a strong graphics card and a big Windows page file (see the README)."
         )
         for ($n = 0; $n -lt 3; $n++) {
@@ -1842,7 +1980,7 @@ function Show-MenuModern {
 
         [void](New-Label $picture "Field of view" 350 50 200 20 $cDim 9)
         $fovValue = New-Label $picture "" 550 50 120 20 $cAccent 9.5 "Segoe UI Semibold" "TopRight"
-        $fovStart = [math]::Max(14, [math]::Min(32, [int]([int](Setting "fov" "105") / 5)))
+        $fovStart = [math]::Max(14, [math]::Min(32, [int]([int](Setting "fov" "120") / 5)))
         $fov = New-Slider $picture 14 32 $fovStart 350 72 320
         $fovText = New-Label $picture "" 350 108 320 32 $cDim 8.5
         $ofPsvr = (Setting "fov_of" "psvr") -eq "psvr"
@@ -1854,7 +1992,7 @@ function Show-MenuModern {
             } elseif ($percent -eq 105 -and $ofPsvr) {
                 $fovText.Text = "A little wider than the game's own: sharp, hardly any border."
             } elseif ($percent -eq 120 -and $ofPsvr) {
-                $fovText.Text = "The smoothest picture, no border (the corners are black)."
+                $fovText.Text = "Recommended: fills the headset's view, no border (the corners are black)."
             } elseif ($percent -eq 155 -and $ofPsvr) {
                 $fovText.Text = "The Quest 3's own view: no lens corners showing."
             } elseif ($percent -gt 100) {
@@ -1898,9 +2036,10 @@ function Show-MenuModern {
         $layerNames = @("Full size (100%)", "Three quarters (75%)", "Half (50%)")
         $startLayer = Read-Number "layer_scale" 0
         if ($startLayer -le 0) {
-            # Not set: 50 for a large picture, 100 for the others. (Older settings had it as an
-            # env line, which is used if there is one.)
-            $startLayer = $(if ($widths[$resolution.Value] -ge 2048) { 50 } else { 100 })
+            # Not set: 100. (Older settings had it as an env line, which is used if there is
+            # one.) Since 0.5.0 only the part of the picture the headset shows is sent, so the
+            # full size costs less than half of the whole picture did.
+            $startLayer = 100
             foreach ($pair in $extraEnv) {
                 $scaleNow = 0.0
                 if ($pair -like "SHADPS4_VR_LAYER_SCALE=*" -and [double]::TryParse($pair.Substring(23), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$scaleNow)) {
@@ -1910,17 +2049,29 @@ function Show-MenuModern {
         }
         [void](New-Label $quality "Picture size sent to the headset" 18 194 320 20 $cDim 9)
         $layerBox = New-Dropdown $quality $layerNames (Find-Nearest ([double[]]$layerKeys) $startLayer) 18 216 320
-        [void](New-Label $quality "Smaller is lighter for the PC and the stream, and a little softer. A big picture looks smoother shrunk here than by Virtual Desktop." 350 212 320 44 $cDim 8.5)
-        $tips.SetToolTip($layerBox, "The picture the game draws is shrunk to this part of its size before it goes to Virtual Desktop (or SteamVR), which would otherwise shrink it itself with a rougher filter. Smaller means less for the PC to send and the headset to receive; a large picture (2048 an eye and more) looks smoother shrunk here.")
+        [void](New-Label $quality "Full size is the sharpest (only the part the headset shows is sent). Smaller is lighter for the PC and the stream, and softer." 350 212 320 44 $cDim 8.5)
+        $tips.SetToolTip($layerBox, "The picture the game draws is shrunk to this part of its size before it goes to Virtual Desktop (or SteamVR), which would otherwise shrink it itself with a rougher filter. Smaller means less for the PC to send and the headset to receive, but fewer pixels in the headset: Full size is recommended. Only the part of the picture the headset shows is sent.")
+
+        # How much more than the headset shows of each eye's picture is sent (crop_margin):
+        # room for the head to turn before the next picture arrives.
+        $marginKeys = @("off", "6", "12", "20", "30")
+        $marginNames = @("Off: send the whole picture", "Small (6 degrees)", "Normal (12 degrees, recommended)", "Large (20 degrees)", "Very large (30 degrees)")
+        $marginShort = @("off", "6", "12", "20", "30")
+        [void](New-Label $quality "Margin around what the headset shows" 18 264 320 20 $cDim 9)
+        $marginIndex = [array]::IndexOf($marginKeys, (Setting "crop_margin" "12"))
+        if ($marginIndex -lt 0) { $marginIndex = 2 }
+        $marginBox = New-Dropdown $quality $marginNames $marginIndex 18 286 320
+        [void](New-Label $quality "Raise it if black edges flash at the sides when you turn your head quickly. Larger sends more pixels." 350 282 320 44 $cDim 8.5)
+        $tips.SetToolTip($marginBox, "Only the part of each eye's picture the headset shows is sent, plus this margin on every side, so that the picture still fills the view while the head turns before the next one arrives. A larger margin sends more pixels; Off sends the whole picture (as before 0.5.0).")
 
         # What the folded card says: the four choices in a line.
         $anisoShort = @("off", "2x", "4x", "8x", "16x")
         $fxaaShort = @("off", "light", "normal", "strong")
         $sharpShort = @("off", "light", "normal", "strong", "very strong", "maximum")
         $updateQuality = {
-            $quality.Summary = ("Textures " + $anisoShort[$anisoBox.SelectedIndex] + "  |  Edges " + $fxaaShort[$fxaaBox.SelectedIndex] + "  |  Sharpening " + $sharpShort[$sharpBox.SelectedIndex] + "  |  Size " + $layerKeys[$layerBox.SelectedIndex] + "%")
+            $quality.Summary = ("Textures " + $anisoShort[$anisoBox.SelectedIndex] + "  |  Edges " + $fxaaShort[$fxaaBox.SelectedIndex] + "  |  Sharpening " + $sharpShort[$sharpBox.SelectedIndex] + "  |  Size " + $layerKeys[$layerBox.SelectedIndex] + "%" + "  |  Margin " + $marginShort[$marginBox.SelectedIndex] + $(if ($marginBox.SelectedIndex -gt 0) { [string][char]0xB0 } else { "" }))
         }
-        foreach ($box in @($anisoBox, $fxaaBox, $maskBox, $sharpBox, $layerBox)) { $box.Add_SelectedIndexChanged($updateQuality) }
+        foreach ($box in @($anisoBox, $fxaaBox, $maskBox, $sharpBox, $layerBox, $marginBox)) { $box.Add_SelectedIndexChanged($updateQuality) }
         & $updateQuality
         foreach ($box in @($anisoBox, $fxaaBox, $sharpBox, $layerBox)) { $box.Add_SelectedIndexChanged($markPresets) }
         $resolution.Add_ValueChanged($markPresets)
@@ -1969,34 +2120,56 @@ function Show-MenuModern {
         foreach ($c in $windowCard.Controls) { $c.Visible = $false }
         $tips.SetToolTip($windowCard, "Click to show or hide what the window on the PC shows.")
 
-        # Row 5: controllers, the DualSense or the Quest controllers playing as Move wands.
-        $moveHeight = $(if ($motionEdition) { 108 } else { 46 })
+        # Row 5: controllers, the DualSense or the VR controllers playing as Move wands.
+        $moveHeight = $(if ($motionEdition) { 176 } else { 46 })
         $moveCard = New-Card "Controllers" 24 480 688 $moveHeight
         $form.Controls.Add($moveCard)
+        # The choice itself is two buttons side by side, the chosen one lit: DualSense, or the
+        # VR controllers as Move wands. $moveOn (hidden) keeps the state, so everything that
+        # asks it or follows its changes stays as it was.
         $moveOn = New-Object RushUi.Toggle
-        $moveOn.Text = "Quest controllers as Move wands"
-        $moveOn.SetBounds(150, 8, 390, 26)
+        $moveOn.Visible = $false
         $moveOn.Checked = ($motionEdition -and ((Setting "controllers" "dualsense") -eq "quest"))
         $moveOn.Enabled = $motionEdition
         $moveCard.Controls.Add($moveOn)
-        $tips.SetToolTip($moveOn, "Plays with the Quest controllers, as the game's two PlayStation Move wands, instead of the DualSense. In the game's start-up question choose the Move controllers. Unplug the DualSense first: the game uses it instead when it is connected. Motion edition only.")
+        $padChoice = New-Object RushUi.FlatButton
+        $padChoice.Text = "DualSense"
+        $padChoice.SetBounds(150, 7, 150, 30)
+        $moveCard.Controls.Add($padChoice)
+        $tips.SetToolTip($padChoice, "Plays with a DualSense connected to this PC (USB or Bluetooth paired with the PC). In the game's start-up question choose the DualShock controller. The Move controller settings below are not used.")
+        $questChoice = New-Object RushUi.FlatButton
+        $questChoice.Text = "Move controllers"
+        $questChoice.SetBounds(310, 7, 230, 30)
+        $moveCard.Controls.Add($questChoice)
+        $tips.SetToolTip($questChoice, "Plays with your VR headset's two controllers (Quest, Index, Vive, Windows Mixed Reality and others) as the game's two PlayStation Move wands: trigger shoots, grip is the Move button. Unplug the DualSense first (the game uses it instead while it is connected). In the game's start-up question choose the Move controllers and squeeze the grip.")
+        $markChoice = {
+            $padChoice.Primary = -not $moveOn.Checked
+            $questChoice.Primary = $moveOn.Checked
+            $padChoice.Invalidate()
+            $questChoice.Invalidate()
+        }
+        $padChoice.Add_Click({ $moveOn.Checked = $false; & $markChoice })
+        $questChoice.Add_Click({ $moveOn.Checked = $true; & $markChoice })
+        & $markChoice
+        $tips.SetToolTip($moveOn, "Plays with the VR controllers, as the game's two PlayStation Move wands, instead of the DualSense. In the game's start-up question choose the Move controllers. Unplug the DualSense first: the game uses it instead when it is connected. Motion edition only.")
         $moveDefaults = @(35, 55, 65)
         $moveKeys = @("move_pitch", "move_reach", "move_turn")
         $moveTitles = @("Aim angle", "Reach", "Turning")
         $moveLimits = @(@(0, 90), @(5, 130), @(5, 130))
         $moveUnits = @(" degrees up", "%", "%")
         $moveTips = @(
-            "Raises the in-game gun from the way the Quest controller points. A Quest controller's handle is tilted down from where you point it, so with 0 the guns follow the handle and point lower than you aim. Raise it if they point down when your controller is straight ahead, lower it if they point up. Recommended: 35.",
+            "Raises the in-game gun from the way the VR controller points. A VR controller's handle is usually tilted down from where you point it, so with 0 the guns follow the handle and point lower than you aim. Raise it if they point down when your controller is straight ahead, lower it if they point up. Recommended: 35.",
             "How far the in-game hands move when you move yours, measured from your head. 100% is as far as you really move. Lower it if the hands move too much. Recommended: 55%.",
             "How much the in-game guns turn when you turn your wrist, measured from level and facing where you face. 100% is as far as you really turn. Lower it if the aim is too touchy. Recommended: 65%."
         )
         $moveSliders = @()
         $moveValues = @()
+        $moveTitleLabels = @()
         for ($i = 0; $i -lt 3; $i++) {
             $x = 18 + $i * 224
             $start = [int][math]::Round((Read-Number $moveKeys[$i] $moveDefaults[$i]))
             $start = [math]::Max($moveLimits[$i][0], [math]::Min($moveLimits[$i][1], $start))
-            [void](New-Label $moveCard $moveTitles[$i] $x 50 100 20 $cDim 9)
+            $moveTitleLabels += (New-Label $moveCard $moveTitles[$i] $x 50 100 20 $cDim 9)
             $moveValues += (New-Label $moveCard "" ($x + 100) 50 100 20 $cAccent 9.5 "Segoe UI Semibold" "TopRight")
             $slider = New-Slider $moveCard $moveLimits[$i][0] $moveLimits[$i][1] $start $x 70 200
             $tips.SetToolTip($slider, $moveTips[$i])
@@ -2017,19 +2190,81 @@ function Show-MenuModern {
         })
         $moveCard.Controls.Add($moveReset)
         $tips.SetToolTip($moveReset, "Puts the three sliders back to what is recommended.")
-        # The sliders can be moved only while the Quest controllers are chosen (and owned).
+        # Which VR controllers, and which of their buttons does what (the Buttons window).
+        $typeLabel = New-Label $moveCard "Controller type" 18 106 300 20 $cDim 9
+        $typeBox = New-Dropdown $moveCard @($controllerTypes | ForEach-Object { $_.Name }) (Get-ControllerType) 18 128 300
+        $tips.SetToolTip($typeBox, "The VR controllers you play with. Quest and most other headsets streamed through Virtual Desktop count as Meta Quest. It decides which buttons the Buttons window offers; the headset's runtime still tells the game which controllers are really in your hands.")
+        $script:moveBinds = @{}
+        for ($t = 0; $t -lt $controllerTypes.Count; $t++) { $script:moveBinds[$t] = Get-MoveBinds $t }
+        $bindButton = New-Object RushUi.FlatButton
+        $bindButton.Text = "Buttons..."
+        $bindButton.SetBounds(330, 128, 130, 34)
+        $moveCard.Controls.Add($bindButton)
+        $tips.SetToolTip($bindButton, "Choose which button of your VR controllers does what on the game's Move wands.")
+        $bindText = New-Label $moveCard "" 472 124 200 44 $cDim 8.5
+        $updateBindText = {
+            $kind = $controllerTypes[$typeBox.SelectedIndex]
+            $now = $script:moveBinds[$typeBox.SelectedIndex]
+            $changed = 0
+            for ($b = 0; $b -lt $moveButtonKeys.Count; $b++) { if ($now[$b] -ne $kind.Defaults[$b]) { $changed++ } }
+            $bindText.Text = $(if ($changed -eq 0) { "Default buttons." } elseif ($changed -eq 1) { "1 button changed." } else { "$changed buttons changed." })
+        }
+        $typeBox.Add_SelectedIndexChanged($updateBindText)
+        $bindButton.Add_Click({
+            $picked = Show-ButtonsWindow $form $typeBox.SelectedIndex $script:moveBinds[$typeBox.SelectedIndex]
+            if ($null -ne $picked) {
+                $script:moveBinds[$typeBox.SelectedIndex] = $picked
+                & $updateBindText
+            }
+        })
+        & $updateBindText
+        # The sliders can be moved only while the Move controllers are chosen.
         $moveEnable = {
             $live = ($moveOn.Enabled -and $moveOn.Checked)
             foreach ($slider in $moveSliders) { $slider.Enabled = $live }
             $moveReset.Enabled = $live
-            foreach ($label in $moveValues) { $label.ForeColor = $(if ($live) { $cAccent } else { $cDim }) }
+            $typeBox.Enabled = $live
+            $bindButton.Enabled = $live
+            $typeLabel.ForeColor = $(if ($live) { $cDim } else { $cOff })
+            $bindText.ForeColor = $(if ($live) { $cDim } else { $cOff })
+            foreach ($label in $moveValues) { $label.ForeColor = $(if ($live) { $cAccent } else { $cOff }) }
+            foreach ($label in $moveTitleLabels) { $label.ForeColor = $(if ($live) { $cDim } else { $cOff }) }
         }
         $moveOn.Add_CheckedChanged($moveEnable)
         & $moveEnable
-        # Without the Motion edition the card is only its title row and the switch.
+        # (Every edition has the Move controllers since 0.5.0; this is left for a build without.)
         if (-not $motionEdition) {
-            foreach ($c in $moveCard.Controls) { if ($c -ne $moveOn) { $c.Visible = $false } }
+            foreach ($c in $moveCard.Controls) { if ($c -ne $padChoice) { $c.Visible = $false } }
         }
+
+        # Picking a headset sets the field of view and the controller type that suit it.
+        $headsetBox.Add_SelectedIndexChanged({
+            $model = $headsetModels[$headsetBox.SelectedIndex]
+            $fov.Value = [math]::Max($fov.Minimum, [math]::Min($fov.Maximum, [int]($model.Fov / 5)))
+            for ($t = 0; $t -lt $controllerTypes.Count; $t++) {
+                if ($controllerTypes[$t].Key -eq $model.Controller) { $typeBox.SelectedIndex = $t }
+            }
+        })
+
+        # The Mods tab (experimental): nothing works there yet.
+        $script:launcherView = "settings"
+        $modsCard = New-Card "Mods (experimental)" 24 92 688 250
+        $modsCard.Visible = $false
+        $form.Controls.Add($modsCard)
+        [void](New-Label $modsCard "Mod support is coming soon." 18 64 650 34 ([RushUi.Theme]::Text) 15 "Segoe UI Semibold")
+        [void](New-Label $modsCard "This tab is where mods for Rush of Blood will be added and switched on. Nothing here works yet: the game always starts without mods for now." 18 110 650 44 $cDim 9.5)
+        [void](New-Label $modsCard "Your settings are in the Settings tab; Play starts the game the same from either tab." 18 170 650 40 $cDim 9)
+        # (The tabs sit at the dark right end of the banner; their rounded corners clear to that.)
+        $header.BackColor = [RushUi.Theme]::Back
+        $settingsTab = New-Object RushUi.FlatButton
+        $settingsTab.Text = "Settings"
+        $header.Controls.Add($settingsTab)
+        $modsTab = New-Object RushUi.FlatButton
+        $modsTab.Text = "Mods (experimental)"
+        $header.Controls.Add($modsTab)
+        $tips.SetToolTip($modsTab, "Mods for the game: coming soon.")
+        $settingsTab.Add_Click({ $script:launcherView = "settings"; & $layout })
+        $modsTab.Add_Click({ $script:launcherView = "mods"; & $layout })
 
         # The strip along the bottom: what the game will start with.
         $status = New-Object RushUi.StatusBar
@@ -2047,7 +2282,7 @@ function Show-MenuModern {
             $status.Items = [string[]]@(
                 $gameText,
                 ("Headset: " + $runtimeShort[$runtimeBox.SelectedIndex]),
-                ("Controllers: " + $(if ($moveOn.Checked) { "Quest, as Move wands" } else { "DualSense" }))
+                ("Controllers: " + $(if ($moveOn.Checked) { "VR controllers, as Move wands" } else { "DualSense" }))
             )
         }
         $runtimeBox.Add_SelectedIndexChanged($updateStatus)
@@ -2075,37 +2310,72 @@ function Show-MenuModern {
         $form.Controls.Add($quit)
         $form.CancelButton = $quit
 
-        # Where everything below the picture goes, which depends on whether the picture quality
-        # card is open; the window grows and shrinks with it.
+        # Where everything goes. The two folding cards (Picture quality, PC window) sit folded in
+        # the column on the left; an opened one moves to a second column on the right (both, one
+        # under the other, when both are open), so the window grows wider instead of longer, and
+        # goes back when it is folded again. The Mods tab shows only its own card.
         $layout = {
-            $y = 414
-            $quality.SetBounds(24, $y, 688, $(if ($quality.Open) { 260 } else { 54 }))
-            $y += $quality.Height + 12
-            $windowCard.SetBounds(24, $y, 688, $(if ($windowCard.Open) { 168 } else { 54 }))
-            $y += $windowCard.Height + 12
-            $moveCard.SetBounds(24, $y, 688, $moveHeight)
-            $y += $moveHeight + 14
+            $settingsView = $script:launcherView -ne "mods"
+            foreach ($c in @($headset, $rate, $picture, $quality, $windowCard, $moveCard)) { $c.Visible = $settingsView }
+            $modsCard.Visible = -not $settingsView
+            $settingsTab.Primary = $settingsView
+            $modsTab.Primary = -not $settingsView
+            $settingsTab.Invalidate()
+            $modsTab.Invalidate()
+            $width = 736
+            if ($settingsView) {
+                $y = 444
+                if (-not $quality.Open) {
+                    $quality.SetBounds(24, $y, 688, 54)
+                    $y += 66
+                }
+                if (-not $windowCard.Open) {
+                    $windowCard.SetBounds(24, $y, 688, 54)
+                    $y += 66
+                }
+                $moveCard.SetBounds(24, $y, 688, $moveHeight)
+                $y += $moveHeight + 14
+                $right = 92
+                if ($quality.Open) {
+                    $quality.SetBounds(736, $right, 688, 330)
+                    $right += 342
+                }
+                if ($windowCard.Open) {
+                    $windowCard.SetBounds(736, $right, 688, 168)
+                    $right += 180
+                }
+                if ($right -gt 92) { $width = 736 + 712 }
+                $contentBottom = [math]::Max($y, $right + 2)
+            } else {
+                $modsCard.SetBounds(24, 92, 688, 250)
+                $contentBottom = 92 + 250 + 14
+            }
+            $y = $contentBottom
             $again.SetBounds(24, ($y + 15), 380, 26)
             $quit.SetBounds(476, ($y + 8), 104, 40)
             $play.SetBounds(592, ($y + 8), 120, 40)
-            $form.ClientSize = New-Object System.Drawing.Size(736, ($y + 62 + 33))
-            $status.SetBounds(1, ($form.ClientSize.Height - 33), 734, 32)
+            $height = $y + 62 + 33
+            $form.ClientSize = New-Object System.Drawing.Size($width, $height)
+            $header.SetBounds(1, 1, ($width - 2), 84)
+            $minimizeButton.SetBounds(($width - 2 - 92), 0, 46, 34)
+            $closeButton.SetBounds(($width - 2 - 46), 0, 46, 34)
+            $modsTab.SetBounds(($width - 2 - 24 - 170), 44, 170, 30)
+            $settingsTab.SetBounds(($width - 2 - 24 - 170 - 8 - 110), 44, 110, 30)
+            $status.SetBounds(1, ($form.ClientSize.Height - 33), ($width - 2), 32)
             # Keep the whole window on the screen when it grows.
             $area = [System.Windows.Forms.Screen]::FromControl($form).WorkingArea
+            if ($form.Right -gt $area.Right) { $form.Left = [math]::Max($area.Left, ($area.Right - $form.Width)) }
             if ($form.Bottom -gt $area.Bottom) { $form.Top = [math]::Max($area.Top, ($area.Bottom - $form.Height)) }
             $form.Invalidate()
         }
-        # Only one of the two folding cards is open at a time.
+        # The two folding cards open and close on their own: both can be open at once, one
+        # under the other in the right-hand column.
         $quality.Add_Toggled({
-            if ($quality.Open) { $windowCard.Open = $false }
             foreach ($c in $quality.Controls) { $c.Visible = $quality.Open }
-            foreach ($c in $windowCard.Controls) { $c.Visible = $windowCard.Open }
             & $layout
         })
         $windowCard.Add_Toggled({
-            if ($windowCard.Open) { $quality.Open = $false }
             foreach ($c in $windowCard.Controls) { $c.Visible = $windowCard.Open }
-            foreach ($c in $quality.Controls) { $c.Visible = $quality.Open }
             & $layout
         })
         & $layout
@@ -2118,15 +2388,17 @@ function Show-MenuModern {
     $result = Show-Form $form
     if ($result -ne [System.Windows.Forms.DialogResult]::OK) { $script:menuOutcome = "quit"; return }
     Save-Setting "runtime" ($runtimeKeys[$runtimeBox.SelectedIndex])
+    Save-Setting "headset_model" ($headsetModels[$headsetBox.SelectedIndex].Key)
     Save-Setting "eye_width" ($widths[$resolution.Value])
     Save-Setting "aniso" ($anisoKeys[$anisoBox.SelectedIndex])
     Save-Setting "fxaa" ($fxaaKeys[$fxaaBox.SelectedIndex])
     Save-Setting "mask" ($maskKeys[$maskBox.SelectedIndex])
     Save-Setting "sharpen" ($sharpKeys[$sharpBox.SelectedIndex])
     Save-Setting "layer_scale" ($layerKeys[$layerBox.SelectedIndex])
+    Save-Setting "crop_margin" ($marginKeys[$marginBox.SelectedIndex])
     # The picture size is a setting now: an env line for it from before would override it.
     if (@($extraEnv | Where-Object { $_ -like "SHADPS4_VR_LAYER_SCALE=*" }).Count -gt 0) {
-        Set-Content -Path $SettingsFile -Value @(Get-Content $SettingsFile | Where-Object { $_ -notmatch '^\s*env\s*=\s*SHADPS4_VR_LAYER_SCALE\s*=' }) -Encoding UTF8
+        Set-Content -LiteralPath $SettingsFile -Value @(Get-Content -LiteralPath $SettingsFile | Where-Object { $_ -notmatch '^\s*env\s*=\s*SHADPS4_VR_LAYER_SCALE\s*=' }) -Encoding UTF8
     }
     Save-Setting "target_fps" ($targetKeys[$targetBox.SelectedIndex])
     Save-Setting "fov" ($fov.Value * 5)
@@ -2135,6 +2407,19 @@ function Show-MenuModern {
     if ($motionEdition) {
         Save-Setting "controllers" ($(if ($moveOn.Checked) { "quest" } else { "dualsense" }))
         for ($i = 0; $i -lt 3; $i++) { Save-Setting $moveKeys[$i] ("" + $moveSliders[$i].Value) }
+        Save-Setting "move_controller" ($controllerTypes[$typeBox.SelectedIndex].Key)
+        # The buttons of every kind the player looked at; a default is saved as it is, so a
+        # later change of defaults does not touch a layout someone chose.
+        for ($t = 0; $t -lt $controllerTypes.Count; $t++) {
+            $kind = $controllerTypes[$t]
+            $binds = $script:moveBinds[$t]
+            $custom = $false
+            for ($b = 0; $b -lt $moveButtonKeys.Count; $b++) { if ($binds[$b] -ne $kind.Defaults[$b]) { $custom = $true } }
+            for ($b = 0; $b -lt $moveButtonKeys.Count; $b++) {
+                $key = "move_bind_" + $kind.Key + "_" + $moveButtonKeys[$b].ToLower()
+                if ($custom -or (Setting $key "") -ne "") { Save-Setting $key $binds[$b] }
+            }
+        }
     }
     Save-Setting "menu" ($(if ($again.Checked) { "1" } else { "0" }))
     Read-Settings
@@ -2213,12 +2498,22 @@ if ($fxaa -gt 0) { $env:SHADPS4_VR_FXAA = $fxaa.ToString([System.Globalization.C
 # lens circles. pc_zoom, in percent: 100 fits the window with no black corners, less is closer in.
 # layer_scale: the picture handed to the headset's runtime is this percent of the size it is drawn
 # at (shrunk here, with a smoother filter than the runtime's); 100 leaves it as it is.
-# Not set: 50 for a large picture (2048 an eye and more), 100 for the others.
-$layerPercent = $(if ($width -ge 2048) { 50.0 } else { 100.0 })
+# Not set: 100 (since 0.5.0 only the part the headset shows is sent, see SHADPS4_VR_CROP).
+$layerPercent = 100.0
 $layerParsed = 0.0
 if ([double]::TryParse((Setting "layer_scale" ""), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$layerParsed)) { $layerPercent = $layerParsed }
 if ($layerPercent -lt 100.0 -and $layerPercent -ge 25.0) {
     $env:SHADPS4_VR_LAYER_SCALE = ($layerPercent / 100.0).ToString([System.Globalization.CultureInfo]::InvariantCulture)
+}
+# crop_margin: degrees sent beyond what the headset shows, on every side (0 to 60), or off to
+# send the whole picture. (An env line in the settings, set further down, still wins.)
+Remove-Item -Path Env:SHADPS4_VR_CROP, Env:SHADPS4_VR_CROP_MARGIN -ErrorAction SilentlyContinue
+$cropMargin = Setting "crop_margin" "12"
+$cropMarginNumber = 0
+if ($cropMargin -eq "off") {
+    $env:SHADPS4_VR_CROP = "0"
+} elseif ([int]::TryParse($cropMargin, [ref]$cropMarginNumber) -and $cropMarginNumber -ge 0 -and $cropMarginNumber -le 60) {
+    $env:SHADPS4_VR_CROP_MARGIN = "$cropMarginNumber"
 }
 $pcView = Setting "pc_view" "left"
 if (@("left", "right", "merged", "both") -contains $pcView) { $env:SHADPS4_PC_WINDOW = $pcView }
@@ -2227,17 +2522,17 @@ $pcZoom = 100.0
 if ([double]::TryParse((Setting "pc_zoom" "100"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$pcZoom) -and $pcZoom -ne 100.0) {
     $env:SHADPS4_PC_WINDOW_ZOOM = ([math]::Max(30.0, [math]::Min(200.0, $pcZoom)) / 100.0).ToString([System.Globalization.CultureInfo]::InvariantCulture)
 }
-# The Quest controllers play as Move wands when "controllers=quest" (the window sets
+# The VR controllers play as Move wands when "controllers=quest" (the window sets
 # it); move_pitch is in degrees, move_reach and move_turn in percent. What is not set is left to the
 # emulator's own recommended values.
 Remove-Item -Path Env:SHADPS4_QUEST_MOVE -ErrorAction SilentlyContinue
 if ($motionEdition -and (Setting "controllers" "dualsense") -eq "quest") { $env:SHADPS4_QUEST_MOVE = "1" }
 if ($env:SHADPS4_QUEST_MOVE -eq "1") {
-    # With a PlayStation controller connected the game keeps using it and ignores the Quest
+    # With a PlayStation controller connected the game keeps using it and ignores the VR
     # controllers, so ask for it to be unplugged (or turned off) first.
     while (Test-PlayStationPad) {
         $answer = Show-Box ("A PlayStation controller (DualSense) is connected to this PC." + [Environment]::NewLine + [Environment]::NewLine +
-            "The game uses it instead of your Quest controllers, so they will not work while it is connected." + [Environment]::NewLine +
+            "The game uses it instead of your VR controllers, so they will not work while it is connected." + [Environment]::NewLine +
             "Unplug the USB cable, or turn it off (hold the PS button until the light goes out)." + [Environment]::NewLine + [Environment]::NewLine +
             "Retry: check again.   Ignore: play anyway.   Abort: quit.") "AbortRetryIgnore" "Warning"
         if ($answer -eq "Retry") { continue }
@@ -2245,7 +2540,16 @@ if ($env:SHADPS4_QUEST_MOVE -eq "1") {
         break
     }
 }
+foreach ($b in $moveButtonKeys) { Remove-Item -Path ("Env:SHADPS4_MOVE_BIND_" + $b) -ErrorAction SilentlyContinue }
+Remove-Item -Path Env:SHADPS4_MOVE_CONTROLLER -ErrorAction SilentlyContinue
 if ($env:SHADPS4_QUEST_MOVE -eq "1") {
+    # Which VR controllers, and the player's buttons for them (see $controllerTypes).
+    $moveType = Get-ControllerType
+    $env:SHADPS4_MOVE_CONTROLLER = $(if ($controllerTypes[$moveType].Emu) { $controllerTypes[$moveType].Emu } else { $controllerTypes[$moveType].Key })
+    $moveTypeBinds = Get-MoveBinds $moveType
+    for ($b = 0; $b -lt $moveButtonKeys.Count; $b++) {
+        Set-Item -Path ("Env:SHADPS4_MOVE_BIND_" + $moveButtonKeys[$b]) -Value $moveTypeBinds[$b]
+    }
     $moveEnv = @(@("move_pitch", "SHADPS4_QUEST_MOVE_PITCH", 1.0), @("move_reach", "SHADPS4_QUEST_MOVE_SCALE", 0.01), @("move_turn", "SHADPS4_QUEST_MOVE_TURN", 0.01))
     foreach ($entry in $moveEnv) {
         $number = 0.0
@@ -2262,7 +2566,7 @@ if ((Setting "predict_ms") -ne "") { $env:SHADPS4_XR_PREDICT_MS = Setting "predi
 if ((Setting "stick_touchpad" "1") -eq "0") { $env:SHADPS4_STICK_TOUCHPAD = "0" }
 if ((Setting "surround" "1") -eq "0") { $env:SHADPS4_VIRTUAL_SURROUND = "0" }
 if ((Setting "real_time" "1") -eq "0") { $env:SHADPS4_TITLE_TIMESTEP = "0" }
-$fovSetting = Setting "fov" "105"
+$fovSetting = Setting "fov" "120"
 if ($fovSetting -ne "100") { $env:SHADPS4_VR_FOV = $fovSetting }
 # fov_of: what fov is a percent of. headset: what the headset being worn shows, all of it at 100
 # (the emulator asks the headset as it starts). psvr: a PlayStation VR's, as the game was made.
@@ -2383,8 +2687,8 @@ if ($env:SHADPS4_OPENXR -ne "0" -and [int]$env:SHADPS4_XR_WAIT -gt 0) {
     Say ("The game waits up to " + $env:SHADPS4_XR_WAIT + " seconds for the headset before it starts on the monitor.")
 }
 if ($env:SHADPS4_QUEST_MOVE -eq "1") {
-    Say "Move controllers: your Quest controllers play as the game's two PlayStation Move wands."
-    Say "Unplug the DualSense (or turn it off) first: while one is connected the game uses it and the Quest controllers do nothing."
+    Say "Move controllers: your VR controllers play as the game's two PlayStation Move wands."
+    Say "Unplug the DualSense (or turn it off) first: while one is connected the game uses it and the VR controllers do nothing."
     Say "In the game's start-up question choose the Move controllers, then press the grip button"
     Say "(the MOVE button) on the controller you hold. Right hand = the first wand."
     Say "Trigger = T, grip = MOVE, A/X = cross, B/Y = circle, stick click = square,"
