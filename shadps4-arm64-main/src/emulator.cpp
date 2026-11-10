@@ -397,9 +397,17 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
         LOG_INFO(Loader, "PSVR Supported: {}", (bool)psf_attributes.support_ps_vr.Value());
         LOG_INFO(Loader, "PSVR Required: {}", (bool)psf_attributes.require_ps_vr.Value());
     }
+    // The title's memory size first (Prepare), then the console's address space is set aside,
+    // and only then is a headset looked for: an OpenXR runtime loads its libraries into this
+    // process (SteamVR's do) and could otherwise take addresses the game maps at fixed places,
+    // which stopped it at the start with "Mapping cannot fit inside free region" (-2147483645).
+    // Same fix as AstroQuest #14.
+    Core::KnownTitle::Prepare();
+#ifndef ENABLE_BACHATA_RUNTIME
+    memory = Core::Memory::Instance();
+#endif
     Core::Vr::Runtime::Instance().Configure(psf_attributes.support_ps_vr.Value() != 0,
                                             psf_attributes.require_ps_vr.Value() != 0);
-    Core::KnownTitle::Prepare();
     if (!args.empty()) {
         const auto argc = std::min<size_t>(args.size(), 32);
         for (auto i = 0; i < argc; i++) {
@@ -422,10 +430,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
     // Create stdin/stdout/stderr
     Common::Singleton<FileSys::HandleTable>::Instance()->CreateStdHandles();
 
-    // Initialize components
-#ifndef ENABLE_BACHATA_RUNTIME
-    memory = Core::Memory::Instance();
-#endif
+    // Initialize components (memory is set up above, before the headset)
     controllers = Common::Singleton<Input::GameControllers>::Instance();
 #ifndef ENABLE_BACHATA_RUNTIME
     linker = Common::Singleton<Core::Linker>::Instance();

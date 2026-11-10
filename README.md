@@ -7,7 +7,7 @@
 Play the PlayStation VR game on a **Meta Quest 3** through Virtual Desktop (or any OpenXR headset),
 from your own copy of the game, through a PS4 emulator.
 
-[![Version](https://img.shields.io/badge/version-0.5.5-2f81f7?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.6-2f81f7?style=flat-square)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-GPL--2.0--or--later-3fb950?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-8957e5?style=flat-square)](#requirements)
 [![Headset](https://img.shields.io/badge/headset-Quest%203%20%C2%B7%20OpenXR-f0883e?style=flat-square)](#requirements)
@@ -46,7 +46,7 @@ depth buffers, its timing and resolution).
 ## Status
 
 > [!NOTE]
-> **Early work in progress, version 0.5.5**, built and tested by one person on one PC and one
+> **Early work in progress, version 0.5.6**, built and tested by one person on one PC and one
 > Quest 3. Expect rough edges, and please report what you find
 > ([Troubleshooting](#troubleshooting)).
 
@@ -229,8 +229,9 @@ emulator was doing. The log is what to send.
 
 </details>
 
-**Reporting a problem:** send `pc-vr\user\log\shad_log.txt` (and `console-errors.txt` from the same
-folder, if there is one) together with what you were doing.
+**Reporting a problem:** open the start-up window's **Log** tab and press **Save a copy...** (choose
+.zip to save all the logs in one file), and send it together with what you were doing. The logs are
+in `pc-vr\user\log` (`shad_log.txt`, and `console-errors.txt` if there is one).
 
 ## Building from source
 
@@ -257,9 +258,9 @@ To make the one-file `RushVR.exe` that is released (Windows PowerShell, from the
 with `tools\pkgtool` holding PkgTool as `tools\make-release.ps1` describes):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\make-release.ps1 -Version 0.5.5
+powershell -ExecutionPolicy Bypass -File tools\make-release.ps1 -Version 0.5.6
 powershell -ExecutionPolicy Bypass -File tools\make-single-exe.ps1 `
-    -From build\release\RushVR-0.5.5-PC-VR-Windows -Out build\single\RushVR-0.5.5.exe
+    -From build\release\RushVR-0.5.6-PC-VR-Windows -Out build\single\RushVR-0.5.6.exe
 ```
 
 The first command packs the play folder (the emulator, the launcher, PkgTool and the default

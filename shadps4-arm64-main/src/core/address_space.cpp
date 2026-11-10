@@ -1,8 +1,13 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+#include <condition_variable>
+#include <algorithm>
 #include <cstdlib>
+#include <deque>
 #include <map>
+#include <thread>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -109,7 +114,31 @@ struct MemoryRegion {
     u32 prot;
     s32 fd;
     bool is_mapped;
+    /// Free in the books, but Windows still has the old view here: the background thread (or
+    /// whoever touches the region next) still has to unmap it. Never split, mapped or coalesced
+    /// while set.
+    bool unmap_pending = false;
 };
+
+/// SHADPS4_BG_UNMAP=1: Unmap hands the slow Windows unmapping of whole mapped regions to a
+/// background thread and returns at once. Off: everything is unmapped right away, as before.
+static bool BackgroundUnmapEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("SHADPS4_BG_UNMAP");
+        const bool on = value != nullptr && value[0] == '1';
+        if (on) {
+            LOG_INFO(Core, "Background unmapping is on (SHADPS4_BG_UNMAP)");
+        }
+        return on;
+    }();
+    return enabled;
+}
+
+static bool UnmapTimingEnabled() {
+    static const bool enabled = std::getenv("SHADPS4_MAP_TIMING") != nullptr ||
+                                std::getenv("SHADPS4_FRAME_STATS") != nullptr;
+    return enabled;
+}
 
 struct AddressSpace::Impl {
     Impl() : process{GetCurrentProcess()} {
@@ -220,6 +249,7 @@ struct AddressSpace::Impl {
     }
 
     ~Impl() {
+        StopUnmapThread();
         if (virtual_base) {
             if (!VirtualFree(virtual_base, 0, MEM_RELEASE)) {
                 LOG_CRITICAL(Core, "Failed to free virtual memory");
@@ -404,7 +434,8 @@ struct AddressSpace::Impl {
     }
 
     void* Map(VAddr virtual_addr, PAddr phys_addr, u64 size, ULONG prot, s32 fd = -1) {
-        std::scoped_lock lk{mutex};
+        std::unique_lock lk{mutex};
+        CompletePendingUnmaps(virtual_addr, size, lk);
         // Get a pointer to the region containing virtual_addr
         auto it = std::prev(regions.upper_bound(virtual_addr));
 
@@ -430,11 +461,16 @@ struct AddressSpace::Impl {
         // First, get the region to update
         auto it = std::prev(regions.upper_bound(virtual_addr));
         ASSERT_MSG(!it->second.is_mapped, "Cannot coalesce mapped regions");
+        if (it->second.unmap_pending) {
+            // Coalesced once its unmap is done (FinishPendingUnmap).
+            return;
+        }
 
         // Check if there are adjacent free placeholders before this area.
         bool can_coalesce = false;
         auto it_prev = it != regions.begin() ? std::prev(it) : regions.end();
         while (it_prev != regions.end() && !it_prev->second.is_mapped &&
+               !it_prev->second.unmap_pending &&
                it_prev->first + it_prev->second.size == it->first) {
             // If there is an earlier region, move our iterator to that and increase size.
             it_prev->second.size = it_prev->second.size + it->second.size;
@@ -451,6 +487,7 @@ struct AddressSpace::Impl {
         // Check if there are adjacent free placeholders after this area.
         auto it_next = std::next(it);
         while (it_next != regions.end() && !it_next->second.is_mapped &&
+               !it_next->second.unmap_pending &&
                it->first + it->second.size == it_next->first) {
             // If there is a later region, increase our current region's size
             it->second.size = it->second.size + it_next->second.size;
@@ -473,7 +510,9 @@ struct AddressSpace::Impl {
     }
 
     void Unmap(VAddr virtual_addr, u64 size) {
-        std::scoped_lock lk{mutex};
+        std::unique_lock lk{mutex};
+        CompletePendingUnmaps(virtual_addr, size, lk);
+        const bool in_background = BackgroundUnmapEnabled();
         // Loop through all regions in the requested range
         u64 remaining_size = size;
         VAddr current_addr = virtual_addr;
@@ -495,7 +534,15 @@ struct AddressSpace::Impl {
 
             // Unmap the region if it was previously mapped
             if (region.is_mapped) {
-                UnmapRegion(&region);
+                if (in_background) {
+                    unmap_queue.push_back(region);
+                    region.unmap_pending = true;
+                    ++pending_unmaps;
+                    StartUnmapThread();
+                    unmap_work.notify_one();
+                } else {
+                    UnmapRegion(&region);
+                }
             }
 
             // Update region data
@@ -510,7 +557,26 @@ struct AddressSpace::Impl {
         }
 
         // Coalesce any free space produced from these unmaps.
-        CoalesceFreeRegions(virtual_addr);
+        if (!in_background) {
+            CoalesceFreeRegions(virtual_addr);
+            return;
+        }
+        // Pending regions are left out of coalescing, so coalesce each free run around them now
+        // (a Map across two free placeholders would not fit); the pending ones join theirs when
+        // their unmap is finished.
+        std::vector<VAddr> free_bases;
+        for (auto it = std::prev(regions.upper_bound(virtual_addr));
+             it != regions.end() && it->first < virtual_addr + size; ++it) {
+            if (!it->second.is_mapped && !it->second.unmap_pending) {
+                free_bases.push_back(it->first);
+            }
+        }
+        for (const VAddr base : free_bases) {
+            const auto it = regions.find(base);
+            if (it != regions.end() && !it->second.is_mapped && !it->second.unmap_pending) {
+                CoalesceFreeRegions(base);
+            }
+        }
     }
 
     void Protect(VAddr virtual_addr, u64 size, bool read, bool write, bool execute) {
@@ -554,7 +620,7 @@ struct AddressSpace::Impl {
         const VAddr virtual_end = virtual_addr + size;
         auto it = --regions.upper_bound(virtual_addr);
         ASSERT_MSG(it != regions.end(), "addr {:#x} out of bounds", virtual_addr);
-        for (; it->first < virtual_end; it++) {
+        for (; it != regions.end() && it->first < virtual_end; it++) {
             if (!it->second.is_mapped) {
                 continue;
             }
@@ -571,6 +637,116 @@ struct AddressSpace::Impl {
         }
     }
 
+    /// Called with the mutex held once the old view of the pending region at `base` is gone.
+    void FinishPendingUnmap(VAddr base) {
+        auto it = regions.find(base);
+        ASSERT_MSG(it != regions.end() && it->second.unmap_pending,
+                   "No pending unmap at {:#x}", base);
+        it->second.unmap_pending = false;
+        --pending_unmaps;
+        CoalesceFreeRegions(base);
+        unmap_done.notify_all();
+    }
+
+    /// Before Map or Unmap touch [virtual_addr, virtual_addr + size): every pending region there
+    /// is unmapped first. One the background thread has not started is unmapped here (as without
+    /// background unmapping); one it is unmapping right now is waited for.
+    void CompletePendingUnmaps(VAddr virtual_addr, u64 size, std::unique_lock<std::mutex>& lk) {
+        if (pending_unmaps == 0) {
+            return;
+        }
+        const VAddr end = virtual_addr + size;
+        const bool timing = UnmapTimingEnabled();
+        const auto start = timing ? std::chrono::steady_clock::now()
+                                  : std::chrono::steady_clock::time_point{};
+        bool waited = false;
+        for (;;) {
+            auto it = regions.upper_bound(virtual_addr);
+            if (it != regions.begin()) {
+                --it;
+            }
+            auto pending = regions.end();
+            for (; it != regions.end() && it->first < end; ++it) {
+                if (it->second.unmap_pending && it->first + it->second.size > virtual_addr) {
+                    pending = it;
+                    break;
+                }
+            }
+            if (pending == regions.end()) {
+                break;
+            }
+            waited = true;
+            const VAddr base = pending->first;
+            const auto queued =
+                std::find_if(unmap_queue.begin(), unmap_queue.end(),
+                             [base](const MemoryRegion& r) { return r.base == base; });
+            if (queued != unmap_queue.end()) {
+                MemoryRegion old_view = *queued;
+                unmap_queue.erase(queued);
+                UnmapRegion(&old_view);
+                FinishPendingUnmap(base);
+            } else {
+                unmap_done.wait(lk);
+            }
+        }
+        if (waited && timing) {
+            const double ms = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count();
+            if (ms >= 1.0) {
+                LOG_INFO(Core, "Had to finish a background unmap first at {:#x}: {:.1f} ms",
+                         virtual_addr, ms);
+            }
+        }
+    }
+
+    void StartUnmapThread() {
+        if (unmap_thread_started) {
+            return;
+        }
+        unmap_thread_started = true;
+        unmap_thread = std::thread([this] { UnmapThread(); });
+    }
+
+    /// Lets the background thread finish what is queued, then end, before the memory goes.
+    void StopUnmapThread() {
+        {
+            std::scoped_lock lk{mutex};
+            unmap_stop = true;
+        }
+        unmap_work.notify_all();
+        if (unmap_thread.joinable()) {
+            unmap_thread.join();
+        }
+    }
+
+    /// Unmaps the queued old views one at a time, without holding the mutex during the slow
+    /// Windows call. Pending regions are not changed by anyone else meanwhile (see
+    /// CompletePendingUnmaps), so the region is still there, pending, when it is finished.
+    void UnmapThread() {
+        std::unique_lock lk{mutex};
+        for (;;) {
+            unmap_work.wait(lk, [this] { return unmap_stop || !unmap_queue.empty(); });
+            if (unmap_queue.empty()) {
+                return;
+            }
+            MemoryRegion old_view = unmap_queue.front();
+            unmap_queue.pop_front();
+            lk.unlock();
+            const auto start = std::chrono::steady_clock::now();
+            UnmapRegion(&old_view);
+            const double ms = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count();
+            lk.lock();
+            FinishPendingUnmap(old_view.base);
+            if (ms >= 5.0 && UnmapTimingEnabled()) {
+                LOG_INFO(Core, "Background unmap of {:#x} bytes at {:#x} took {:.1f} ms",
+                         old_view.size, old_view.base, ms);
+            }
+        }
+    }
+
     boost::icl::interval_set<VAddr> GetUsableRegions() {
         boost::icl::interval_set<VAddr> reserved_regions;
         for (auto region : regions) {
@@ -580,6 +756,13 @@ struct AddressSpace::Impl {
     }
 
     std::mutex mutex;
+    std::condition_variable unmap_work;
+    std::condition_variable unmap_done;
+    std::deque<MemoryRegion> unmap_queue;
+    u64 pending_unmaps = 0;
+    bool unmap_thread_started = false;
+    bool unmap_stop = false;
+    std::thread unmap_thread;
     HANDLE process{};
     HANDLE backing_handle{};
     u8* backing_base{};

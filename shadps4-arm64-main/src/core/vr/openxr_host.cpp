@@ -293,6 +293,11 @@ struct OpenXrHost::Impl {
     u32 system_failures{};
     Clock::time_point last_wanted;
     bool ever_wanted{};
+    /// Whether a session asked for no pictures for long is ended and made again. Only for
+    /// Virtual Desktop's runtime, which says nothing when its headset goes away; others (SteamVR)
+    /// ask for no pictures while nobody looks and tell the state through OpenXR, and ending
+    /// their sessions crashed SteamVR's client library. SHADPS4_XR_RENEW_UNWANTED=1/0 overrides.
+    bool renew_unwanted{};
     Clock::time_point last_frame_ended;
     float lose_after{};
     bool pause_when_away{true};
@@ -509,6 +514,12 @@ struct OpenXrHost::Impl {
                                    XR_VERSION_MAJOR(properties.runtimeVersion),
                                    XR_VERSION_MINOR(properties.runtimeVersion),
                                    XR_VERSION_PATCH(properties.runtimeVersion));
+        if (const char* renew = std::getenv("SHADPS4_XR_RENEW_UNWANTED");
+            renew != nullptr && renew[0] != '\0') {
+            renew_unwanted = renew[0] != '0';
+        } else {
+            renew_unwanted = runtime_name.starts_with("VirtualDesktopXR");
+        }
         return true;
     }
 
@@ -1698,7 +1709,8 @@ struct OpenXrHost::Impl {
             focus_patience = FirstFocusPatience;
             return;
         }
-        if (session_lost) {
+        // Only Virtual Desktop's runtime is handled so (see renew_unwanted).
+        if (session_lost || !renew_unwanted) {
             return;
         }
         if (state == XR_SESSION_STATE_FOCUSED) {

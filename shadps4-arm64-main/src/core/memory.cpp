@@ -1743,7 +1743,9 @@ MemoryManager::VMAHandle MemoryManager::CarveVMA(VAddr virtual_addr, u64 size) {
         return vma_handle;
     }
 
-    ASSERT_MSG(end_in_vma <= vma.size, "Mapping cannot fit inside free region");
+    ASSERT_MSG(end_in_vma <= vma.size,
+               "Mapping of {:#x} bytes at {:#x} cannot fit inside free region {:#x} - {:#x}", size,
+               virtual_addr, vma.base, vma.base + vma.size);
 
     if (end_in_vma != vma.size) {
         // Split VMA at the end of the allocated region

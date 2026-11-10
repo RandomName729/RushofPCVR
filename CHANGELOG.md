@@ -3,7 +3,21 @@
 All notable changes to RushVR, newest first. RushVR is shadPS4 plus a VR layer and the fixes that
 let Until Dawn: Rush of Blood run under emulation.
 
-## 0.5.5 - 2026-11-06
+## 0.5.6 - 2026-11-09
+
+(0.5.5 was not released on its own: its changes are part of 0.5.6.)
+
+- **SteamVR start-up crash fixed** (PS VR2 and other SteamVR headsets): "Assertion failed!", exit code
+  -2147483645, log `CarveVMA: Assertion Failed! Mapping cannot fit inside free region`. The OpenXR
+  runtime was started before the console's address space was reserved, and SteamVR's libraries took
+  addresses the game maps at fixed places. `Emulator::Run` now reserves the memory first
+  (`KnownTitle::Prepare`, then `Core::Memory::Instance`, then `Vr::Runtime::Configure`). Sessions of
+  runtimes other than Virtual Desktop are no longer ended and remade while the headset rests
+  (`SHADPS4_XR_RENEW_UNWANTED`). The assertion now names the mapping and the free region. Same fix as
+  AstroQuest ([#14](https://github.com/bigmak94/AstroQuest/issues/14#issuecomment-6015883154)).
+- **Log tab** in the start-up window: shows `shad_log.txt`, `shad_log.prev.txt` or
+  `console-errors.txt` (the last 2 MB), Refresh, Open folder, and **Save a copy...** anywhere, as the
+  whole file or all logs in one zip.
 
 - **A much sharper picture in the headset.** See "Sharper picture" below: this is what fixes the
   pixelated look.

@@ -1,11 +1,20 @@
-# RushVR 0.5.5
+# RushVR 0.5.6
 
 **Until Dawn: Rush of Blood in VR on a Windows PC**, in a Meta Quest 3 through Virtual Desktop or another
 OpenXR headset. Bring your own copy of the game (US release, CUSA03683, version 1.00); nothing of it is
 included.
 
-## What's new in 0.5.5
+## What's new in 0.5.6
 
+- **SteamVR no longer crashes at the start (PS VR2 and other SteamVR headsets).** The game stopped
+  with "Assertion failed!" (exit code -2147483645; in the log: `CarveVMA: Assertion Failed! Mapping
+  cannot fit inside free region`). SteamVR's own files were loaded before the game's memory was
+  reserved and took addresses the game needs; now the game's memory is reserved first. SteamVR's
+  session is also no longer restarted while the headset rests. The same problem was found and fixed
+  in AstroQuest ([AstroQuest #14](https://github.com/bigmak94/AstroQuest/issues/14#issuecomment-6015883154)).
+- **A Log tab in the start-up window**: read the log of the last run (or the one before, or the
+  console errors), and **Save a copy...** anywhere you like, as a text file or all logs in one zip
+  to send with a problem report.
 - **A much sharper picture.** The pixelated look is fixed: only the part of each eye's picture the
   headset shows (plus a margin for turning your head) is sent, at full size. The margin is a new
   choice under Picture quality.

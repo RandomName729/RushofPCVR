@@ -165,12 +165,11 @@
 #move_bind_touch_cross=lower
 
 # Extra environment variables for the emulator, as many lines as needed.
-#env=NAME=value
 eye_width=1152
 fps=60
 fov=120
 menu=1
-game=C:\UD ROB PC\games\CUSA03683\eboot.bin
+game=
 runtime=pc
 aniso=16
 fxaa=0.65

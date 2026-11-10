@@ -178,7 +178,7 @@ function Show-ButtonsWindow($owner, [int]$type, [string[]]$current) {
     return ,$chosen
 }
 # The version shown in the window's banner (the release scripts check that it is the release's).
-$launcherVersion = "0.5.5"
+$launcherVersion = "0.5.6"
 
 # PS4 Pro mode ("neo_mode" in user\config.json) is always switched OFF now (see the call just
 # before the emulator starts): with it on, the game's flashlight shadows split into extra lines
@@ -2266,6 +2266,146 @@ function Show-MenuModern {
         $settingsTab.Add_Click({ $script:launcherView = "settings"; & $layout })
         $modsTab.Add_Click({ $script:launcherView = "mods"; & $layout })
 
+        # The Log tab: the emulator's log files of the last runs, to read here and to save a copy
+        # of anywhere (to send with a problem report).
+        $logFolder = Join-Path $here "user\log"
+        $logFiles = @("shad_log.txt", "shad_log.prev.txt", "console-errors.txt")
+        $logNames = @("Last run (shad_log.txt)", "The run before (shad_log.prev.txt)", "Console errors of the last run (console-errors.txt)")
+        $logCard = New-Card "Log" 24 92 1400 560
+        $logCard.Visible = $false
+        $form.Controls.Add($logCard)
+        [void](New-Label $logCard "Show" 18 50 60 20 $cDim 9)
+        $logBox = New-Dropdown $logCard $logNames 0 18 72 420
+        $logInfo = New-Label $logCard "" 452 70 560 40 $cDim 8.5
+        $logRefresh = New-Object RushUi.FlatButton
+        $logRefresh.Text = "Refresh"
+        $logRefresh.SetBounds(1022, 72, 100, 34)
+        $logCard.Controls.Add($logRefresh)
+        $logOpen = New-Object RushUi.FlatButton
+        $logOpen.Text = "Open folder"
+        $logOpen.SetBounds(1130, 72, 120, 34)
+        $logCard.Controls.Add($logOpen)
+        $tips.SetToolTip($logOpen, "Opens the folder the log files are in: " + $logFolder)
+        $logSave = New-Object RushUi.FlatButton
+        $logSave.Text = "Save a copy..."
+        $logSave.Primary = $true
+        $logSave.SetBounds(1258, 72, 124, 34)
+        $logCard.Controls.Add($logSave)
+        $tips.SetToolTip($logSave, "Saves the whole file shown (not only the part on screen) wherever you choose. Choose .zip as the type to save all three log files in one file, the best thing to send with a problem report.")
+        $logText = New-Object System.Windows.Forms.TextBox
+        $logText.Multiline = $true
+        $logText.ReadOnly = $true
+        $logText.WordWrap = $false
+        $logText.ScrollBars = [System.Windows.Forms.ScrollBars]::Both
+        $logText.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+        $logText.BackColor = [RushUi.Theme]::Field
+        $logText.ForeColor = [RushUi.Theme]::Text
+        $logText.Font = New-Object System.Drawing.Font("Consolas", 9)
+        $logText.MaxLength = 0
+        $logText.SetBounds(18, 120, 1364, 422)
+        $logCard.Controls.Add($logText)
+        # The end of a file (a log can be many megabytes; the newest lines are at its end), read
+        # while the emulator may still be writing it.
+        $readLogTail = {
+            param([string]$path, [long]$most)
+            $stream = New-Object System.IO.FileStream($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+            try {
+                $cut = $stream.Length -gt $most
+                if ($cut) { [void]$stream.Seek(-$most, [System.IO.SeekOrigin]::End) }
+                $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+                $text = $reader.ReadToEnd()
+                if ($cut) {
+                    $first = $text.IndexOf("`n")
+                    if ($first -ge 0) { $text = $text.Substring($first + 1) }
+                }
+                return @($cut, ($text -replace "`r?`n", "`r`n"))
+            } finally {
+                $stream.Dispose()
+            }
+        }
+        $showLog = {
+            $path = Join-Path $logFolder $logFiles[$logBox.SelectedIndex]
+            if (-not (Test-Path -LiteralPath $path)) {
+                $logText.Text = ""
+                $logInfo.Text = "There is no " + $logFiles[$logBox.SelectedIndex] + " yet: it is written when the game runs."
+                return
+            }
+            try {
+                $item = Get-Item -LiteralPath $path
+                $read = & $readLogTail $path (2MB)
+                $logText.Text = $read[1]
+                $logText.SelectionStart = $logText.TextLength
+                $logText.ScrollToCaret()
+                $size = if ($item.Length -ge 1MB) { "{0:N1} MB" -f ($item.Length / 1MB) } else { "{0:N0} KB" -f [math]::Ceiling($item.Length / 1KB) }
+                $logInfo.Text = $item.FullName + "`n" + $size + ", written " + $item.LastWriteTime.ToString("g") + $(if ($read[0]) { ". Shown: its last 2 MB; a saved copy is the whole file." } else { "" })
+            } catch {
+                $logText.Text = ""
+                $logInfo.Text = "The log could not be read: " + $_.Exception.Message
+            }
+        }
+        $logBox.Add_SelectedIndexChanged($showLog)
+        $logRefresh.Add_Click($showLog)
+        $logOpen.Add_Click({
+            New-Item -ItemType Directory -Force -Path $logFolder | Out-Null
+            Start-Process explorer.exe -ArgumentList ("`"" + $logFolder + "`"")
+        })
+        $logSave.Add_Click({
+            $name = $logFiles[$logBox.SelectedIndex]
+            $path = Join-Path $logFolder $name
+            if (-not (Test-Path -LiteralPath $path)) {
+                [void](Show-Box ("There is no " + $name + " to save yet: it is written when the game runs.") "OK" "Information")
+                return
+            }
+            $dialog = New-Object System.Windows.Forms.SaveFileDialog
+            $dialog.Title = "Save a copy of the log"
+            $dialog.Filter = "Text file (*.txt)|*.txt|All three log files in one zip (*.zip)|*.zip"
+            $dialog.FileName = "RushVR-" + [System.IO.Path]::GetFileNameWithoutExtension($name) + "-" + (Get-Date -Format "yyyy-MM-dd-HHmm")
+            $dialog.InitialDirectory = [Environment]::GetFolderPath("Desktop")
+            $dialog.OverwritePrompt = $true
+            try {
+                if ($dialog.ShowDialog($form) -ne [System.Windows.Forms.DialogResult]::OK) { return }
+                $target = $dialog.FileName
+                if ($dialog.FilterIndex -eq 2 -or $target.ToLower().EndsWith(".zip")) {
+                    if (-not $target.ToLower().EndsWith(".zip")) { $target += ".zip" }
+                    Add-Type -AssemblyName System.IO.Compression
+                    $zipStream = [System.IO.File]::Open($target, [System.IO.FileMode]::Create)
+                    try {
+                        $zip = New-Object System.IO.Compression.ZipArchive($zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+                        foreach ($one in ($logFiles + @("console.txt"))) {
+                            $from = Join-Path $logFolder $one
+                            if (-not (Test-Path -LiteralPath $from)) { continue }
+                            $entry = $zip.CreateEntry($one)
+                            $out = $entry.Open()
+                            $in = New-Object System.IO.FileStream($from, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+                            try { $in.CopyTo($out) } finally { $in.Dispose(); $out.Dispose() }
+                        }
+                        $zip.Dispose()
+                    } finally {
+                        $zipStream.Dispose()
+                    }
+                } else {
+                    # Copied while the emulator may still be writing it.
+                    $in = New-Object System.IO.FileStream($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+                    try {
+                        $out = [System.IO.File]::Open($target, [System.IO.FileMode]::Create)
+                        try { $in.CopyTo($out) } finally { $out.Dispose() }
+                    } finally {
+                        $in.Dispose()
+                    }
+                }
+                $logInfo.Text = "Saved: " + $target
+            } catch {
+                [void](Show-Box ("The copy could not be saved: " + $_.Exception.Message) "OK" "Warning")
+            } finally {
+                $dialog.Dispose()
+            }
+        })
+        $logTab = New-Object RushUi.FlatButton
+        $logTab.Text = "Log"
+        $header.Controls.Add($logTab)
+        $tips.SetToolTip($logTab, "The emulator's log of the last runs: read it, or save a copy to send with a problem report.")
+        $logTab.Add_Click({ $script:launcherView = "log"; & $layout; & $showLog })
+
         # The strip along the bottom: what the game will start with.
         $status = New-Object RushUi.StatusBar
         $status.SetBounds(1, 666, 734, 32)
@@ -2315,12 +2455,17 @@ function Show-MenuModern {
         # under the other, when both are open), so the window grows wider instead of longer, and
         # goes back when it is folded again. The Mods tab shows only its own card.
         $layout = {
-            $settingsView = $script:launcherView -ne "mods"
+            $settingsView = $script:launcherView -eq "settings"
+            $logView = $script:launcherView -eq "log"
+            $modsView = $script:launcherView -eq "mods"
             foreach ($c in @($headset, $rate, $picture, $quality, $windowCard, $moveCard)) { $c.Visible = $settingsView }
-            $modsCard.Visible = -not $settingsView
+            $modsCard.Visible = $modsView
+            $logCard.Visible = $logView
             $settingsTab.Primary = $settingsView
-            $modsTab.Primary = -not $settingsView
+            $logTab.Primary = $logView
+            $modsTab.Primary = $modsView
             $settingsTab.Invalidate()
+            $logTab.Invalidate()
             $modsTab.Invalidate()
             $width = 736
             if ($settingsView) {
@@ -2346,6 +2491,11 @@ function Show-MenuModern {
                 }
                 if ($right -gt 92) { $width = 736 + 712 }
                 $contentBottom = [math]::Max($y, $right + 2)
+            } elseif ($logView) {
+                # The log is wide: the window takes both columns' width for it.
+                $width = 736 + 712
+                $logCard.SetBounds(24, 92, 1400, 560)
+                $contentBottom = 92 + 560 + 14
             } else {
                 $modsCard.SetBounds(24, 92, 688, 250)
                 $contentBottom = 92 + 250 + 14
@@ -2360,7 +2510,8 @@ function Show-MenuModern {
             $minimizeButton.SetBounds(($width - 2 - 92), 0, 46, 34)
             $closeButton.SetBounds(($width - 2 - 46), 0, 46, 34)
             $modsTab.SetBounds(($width - 2 - 24 - 170), 44, 170, 30)
-            $settingsTab.SetBounds(($width - 2 - 24 - 170 - 8 - 110), 44, 110, 30)
+            $logTab.SetBounds(($width - 2 - 24 - 170 - 8 - 80), 44, 80, 30)
+            $settingsTab.SetBounds(($width - 2 - 24 - 170 - 8 - 80 - 8 - 110), 44, 110, 30)
             $status.SetBounds(1, ($form.ClientSize.Height - 33), ($width - 2), 32)
             # Keep the whole window on the screen when it grows.
             $area = [System.Windows.Forms.Screen]::FromControl($form).WorkingArea
