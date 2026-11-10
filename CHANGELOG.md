@@ -13,8 +13,8 @@ let Until Dawn: Rush of Blood run under emulation.
   addresses the game maps at fixed places. `Emulator::Run` now reserves the memory first
   (`KnownTitle::Prepare`, then `Core::Memory::Instance`, then `Vr::Runtime::Configure`). Sessions of
   runtimes other than Virtual Desktop are no longer ended and remade while the headset rests
-  (`SHADPS4_XR_RENEW_UNWANTED`). The assertion now names the mapping and the free region. Same fix as
-  AstroQuest ([#14](https://github.com/bigmak94/AstroQuest/issues/14#issuecomment-6015883154)).
+  (`SHADPS4_XR_RENEW_UNWANTED`). The assertion now names the mapping and the free region. The same
+  fix was found for the PlayStation VR layer this port was begun from (see Thanks in the README).
 - **Log tab** in the start-up window: shows `shad_log.txt`, `shad_log.prev.txt` or
   `console-errors.txt` (the last 2 MB), Refresh, Open folder, and **Save a copy...** anywhere, as the
   whole file or all logs in one zip.
