@@ -12,7 +12,8 @@ struct Vec3;
 /// What is known about the inner workings of particular titles, and what the emulator does with
 /// it. Everything here applies to one exact build of one title and does nothing for any other.
 ///
-/// Until Dawn: Rush of Blood (CUSA03683, CUSA02350):
+/// Until Dawn: Rush of Blood (CUSA03683 of the US, CUSA02350 of Europe, CUSA04006 of Asia, in
+/// English, Chinese and Korean):
 ///  - It draws both eyes into one picture, side by side, 2304x1296 on the console and 2688x1512
 ///    on its Pro model, from a list of sizes in its data and a pool of graphics memory that
 ///    is larger by 200 MB on the Pro. SHADPS4_ROB_EYE_WIDTH=<pixels> (1152 on the console, up
@@ -28,6 +29,16 @@ struct Vec3;
 ///  - Its tracking manager keeps the point it counts head positions from, and the position
 ///    counted from it, which is what a view that is off shows up in.
 namespace Core::KnownTitle {
+
+/// Whether the title is Until Dawn: Rush of Blood, in any of its releases: the US one
+/// (CUSA03683), the European one (CUSA02350) or the Asian one in English, Chinese and Korean
+/// (CUSA04006); or another that calls itself so (its name has "Rush of Blood" in it, in
+/// English or Korean). SHADPS4_ROB_RELEASE=1 takes any title for it. What is done for it is
+/// found in the game by what the code says, and nothing is changed unless all of it is found.
+bool IsRushOfBlood();
+
+/// The release of Rush of Blood this is, as a name for the log ("US", "Europe", ...).
+const char* RushRelease();
 
 /// Called when the title has handed in a frame (sceGnmSubmitDone): sets the title's time step
 /// to what its frames take. SHADPS4_TITLE_TIMESTEP=0 leaves the title to its own; a number of

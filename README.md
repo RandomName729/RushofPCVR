@@ -7,7 +7,7 @@
 Play the PlayStation VR game on a **Meta Quest 3** through Virtual Desktop (or any OpenXR headset),
 from your own copy of the game, through a PS4 emulator.
 
-[![Version](https://img.shields.io/badge/version-0.5.6-2f81f7?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.7-2f81f7?style=flat-square)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-GPL--2.0--or--later-3fb950?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-8957e5?style=flat-square)](#requirements)
 [![Headset](https://img.shields.io/badge/headset-Quest%203%20%C2%B7%20OpenXR-f0883e?style=flat-square)](#requirements)
@@ -46,7 +46,7 @@ depth buffers, its timing and resolution).
 ## Status
 
 > [!NOTE]
-> **Early work in progress, version 0.5.6**, built and tested by one person on one PC and one
+> **Early work in progress, version 0.5.7**, built and tested by one person on one PC and one
 > Quest 3. Expect rough edges, and please report what you find
 > ([Troubleshooting](#troubleshooting)).
 
@@ -79,7 +79,7 @@ your **Controller type** (Meta Quest, PlayStation VR2 Sense, Valve Index, Window
 | --- | --- |
 | **Headset** | A **Meta Quest 3** with [Virtual Desktop](https://www.vrdesktop.net/) (the app on the headset and the Streamer on the PC). Other OpenXR headsets may work; nobody has tried. |
 | **Controllers** | A **PS5 DualSense** connected to the PC itself (USB, or Bluetooth paired with the PC, not the headset: paired with the headset it reaches the PC without motion sensors and touchpad), **or** just your VR headset's two controllers (see Status). |
-| **Game** | *Until Dawn: Rush of Blood*, US release **CUSA03683, version 1.00**, dumped from your own console and game: the game's folder (the one with `eboot.bin`, `sce_sys` and `sce_module`) or the `.pkg` made from the dump. A package downloaded from the PlayStation Store is encrypted and cannot be used. The European release (CUSA02350 1.00) has been reported to start and play as well; other versions are untested. |
+| **Game** | *Until Dawn: Rush of Blood*, US release **CUSA03683, version 1.00**, dumped from your own console and game: the game's folder (the one with `eboot.bin`, `sce_sys` and `sce_module`) or the `.pkg` made from the dump. A package downloaded from the PlayStation Store is encrypted and cannot be used. The European (CUSA02350) and Asian English/Chinese/Korean (CUSA04006) releases, version 1.00, get the same speed and picture fixes, found in them by pattern: the European one has been reported to play; the Asian one is new and less tested. |
 | **PC** | Windows 10 or 11 (64-bit), a graphics card with **Vulkan 1.3**, 16 GB of memory or more, and the [Microsoft Visual C++ Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe) (the launcher says so if it is missing). |
 
 ## Quick start
@@ -258,9 +258,9 @@ To make the one-file `RushVR.exe` that is released (Windows PowerShell, from the
 with `tools\pkgtool` holding PkgTool as `tools\make-release.ps1` describes):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\make-release.ps1 -Version 0.5.6
+powershell -ExecutionPolicy Bypass -File tools\make-release.ps1 -Version 0.5.7
 powershell -ExecutionPolicy Bypass -File tools\make-single-exe.ps1 `
-    -From build\release\RushVR-0.5.6-PC-VR-Windows -Out build\single\RushVR-0.5.6.exe
+    -From build\release\RushVR-0.5.7-PC-VR-Windows -Out build\single\RushVR-0.5.7.exe
 ```
 
 The first command packs the play folder (the emulator, the launcher, PkgTool and the default

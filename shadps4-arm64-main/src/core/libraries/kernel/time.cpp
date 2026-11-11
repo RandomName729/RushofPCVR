@@ -20,6 +20,7 @@
 #include "common/elf_info.h"
 #include "common/native_clock.h"
 #include "common/thread.h"
+#include "core/known_title.h"
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/kernel/posix_error.h"
@@ -445,7 +446,7 @@ void InstallRdtscTrap(double hz, std::vector<uintptr_t> sites, u32 candidates) {
 } // namespace
 #endif
 
-/// Until Dawn: Rush of Blood (US 1.00) times its frames, animations and captions by reading the
+/// Until Dawn: Rush of Blood (US 1.00, and its other releases) times its frames, animations and captions by reading the
 /// processor's time stamp counter itself, and converts the ticks to seconds with the console's
 /// 1.594 GHz built in. The counter of a PC runs faster (2.4 GHz here), so everything the game
 /// times ran about 1.5 times as fast as it should: the captions finished far ahead of the
@@ -455,8 +456,7 @@ void InstallGuestClockFix() {
 #ifdef _WIN64
     const auto serial = Common::ElfInfo::Instance().GameSerial();
     const bool us = serial == "CUSA03683";
-    const bool europe = serial == "CUSA02350";
-    if (!us && !europe) {
+    if (!Core::KnownTitle::IsRushOfBlood()) {
         return;
     }
     const char* setting = std::getenv("SHADPS4_RDTSC_HZ");
@@ -465,8 +465,9 @@ void InstallGuestClockFix() {
         LOG_INFO(Lib_Kernel, "The game's own clock is left as the PC's (SHADPS4_RDTSC_HZ=0)");
         return;
     }
-    // The US build has the places in a table. The European build is searched for the code
-    // around each of them, and nothing is changed unless every one is found.
+    // The US build has the places in a table. Every other release (Europe CUSA02350, Asia
+    // CUSA04006 in English, Chinese and Korean) is searched for the code around each of them,
+    // and nothing is changed unless every one is found.
     // SHADPS4_RDTSC_BY_PATTERN=1 uses the search for the US build too, to check it.
     const char* by_pattern_setting = std::getenv("SHADPS4_RDTSC_BY_PATTERN");
     const bool by_pattern =
@@ -476,8 +477,8 @@ void InstallGuestClockFix() {
         by_pattern ? RdtscSitesByPattern(&candidates) : RdtscSitesFromTable(&candidates);
     if (sites.empty()) {
         LOG_WARNING(Lib_Kernel, "The game's own clock is left as the PC's: its places were not "
-                                "found ({})",
-                    serial);
+                                "found ({}, {} release)",
+                    serial, Core::KnownTitle::RushRelease());
         return;
     }
     InstallRdtscTrap(hz, std::move(sites), candidates);

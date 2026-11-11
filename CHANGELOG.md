@@ -3,6 +3,19 @@
 All notable changes to RushVR, newest first. RushVR is shadPS4 plus a VR layer and the fixes that
 let Until Dawn: Rush of Blood run under emulation.
 
+## 0.5.7 - 2026-11-10
+
+- **Asian release (CUSA04006, English/Chinese/Korean): clock fix and sharper picture.** Its game
+  speed and caption fix (the 201 places the game reads the processor's clock) and the larger
+  picture for the headset (the game's list of sizes and its graphics pool) were only applied to
+  the US and European releases, so in the Korean copy everything ran too fast and the picture
+  stayed at the console's size. Both are now found in it the same way as in the European one: by
+  the code around them, all of it or none. A copy with another serial whose name has "Rush of
+  Blood" in it (in English or Korean) is tried too; `SHADPS4_ROB_RELEASE=1` takes any copy for
+  it. The log names the release at start-up (`Until Dawn: Rush of Blood, ... release`).
+- The launcher finds and accepts the European and Asian releases (the status line is green for
+  them), and the check for a game folder whose path is too long now runs for every release.
+
 ## 0.5.6 - 2026-11-09
 
 (0.5.5 was not released on its own: its changes are part of 0.5.6.)

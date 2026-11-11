@@ -178,7 +178,7 @@ function Show-ButtonsWindow($owner, [int]$type, [string[]]$current) {
     return ,$chosen
 }
 # The version shown in the window's banner (the release scripts check that it is the release's).
-$launcherVersion = "0.5.6"
+$launcherVersion = "0.5.7"
 
 # PS4 Pro mode ("neo_mode" in user\config.json) is always switched OFF now (see the call just
 # before the emulator starts): with it on, the game's flashlight shadows split into extra lines
@@ -1341,6 +1341,23 @@ function Show-Form($form) {
 # and when none is found a window asks where it is.
 $gamesFolder = Join-Path $root "games"
 $madeFor = "CUSA03683"
+# The releases of the game whose fixes for its speed and picture RushVR knows how to find: the US
+# one it was made with, and the European and Asian (English, Chinese and Korean) ones, version
+# 01.00 of each. Another copy that calls itself Rush of Blood is tried in the same way.
+$knownReleases = [ordered]@{ "CUSA03683" = "US"; "CUSA02350" = "Europe"; "CUSA04006" = "Asia (English, Chinese, Korean)" }
+# "Rush of Blood" in Korean, as the name in a Korean copy's param.sfo may have it.
+$rushKorean = -join ([char[]]@(0xB7EC, 0xC2DC, 0x20, 0xC624, 0xBE0C, 0x20, 0xBE14, 0xB7EC, 0xB4DC))
+function Test-RushRelease($sfo) {
+    if (-not $sfo -or $sfo.Count -eq 0) { return $false }
+    if ($knownReleases.Contains([string]$sfo["TITLE_ID"])) { return $true }
+    $title = [string]$sfo["TITLE"]
+    return ($title -match "rush of blood") -or $title.Contains($rushKorean)
+}
+function Get-ReleaseName($sfo) {
+    $id = [string]$sfo["TITLE_ID"]
+    if ($knownReleases.Contains($id)) { return $knownReleases[$id] }
+    return "another release"
+}
 # The longest path of a file inside that game: the emulator cannot open a file whose whole path
 # is longer than 259 characters.
 $longestInside = 126
@@ -1408,7 +1425,7 @@ function Find-Game([string]$top) {
     foreach ($folder in (Get-Folders $top)) {
         $eboot = [System.IO.Path]::Combine($folder, "eboot.bin")
         if (-not [System.IO.File]::Exists($eboot)) { continue }
-        if ((Get-GameInfo $eboot)["TITLE_ID"] -eq $madeFor) { return $eboot }
+        if (Test-RushRelease (Get-GameInfo $eboot)) { return $eboot }
         if ($null -eq $first) { $first = $eboot }
     }
     return $first
@@ -2416,7 +2433,7 @@ function Show-MenuModern {
             $gameOk = $true
             if ($info -and $info.Count -gt 0) {
                 $gameText = "Game " + $info["TITLE_ID"] + " " + $info["APP_VER"]
-                $gameOk = ($info["TITLE_ID"] -eq $madeFor -and $info["APP_VER"] -eq "01.00")
+                $gameOk = ((Test-RushRelease $info) -and $info["APP_VER"] -eq "01.00")
             }
             $status.Ok = $gameOk
             $status.Items = [string[]]@(
@@ -2609,9 +2626,14 @@ Say ("The game: " + $game)
 $info = Get-GameInfo $game
 if ($info.Count -eq 0) {
     Say "sce_sys\param.sfo is missing next to it: this is not a complete copy of the game, and the emulator may not know it." "Yellow"
-} elseif ($info["TITLE_ID"] -ne $madeFor -or $info["APP_VER"] -ne "01.00") {
-    Say ("This is " + $info["TITLE"] + ", " + $info["TITLE_ID"] + " version " + $info["APP_VER"] + ". RushVR is made for the US release, " + $madeFor + " version 01.00: with another, its fixes for the game's speed and picture do not apply, and it may not run.") "Yellow"
-} elseif ([System.IO.Path]::GetDirectoryName($game).Length + 1 + $longestInside -gt 259) {
+} elseif (-not (Test-RushRelease $info)) {
+    Say ("This is " + $info["TITLE"] + ", " + $info["TITLE_ID"] + " version " + $info["APP_VER"] + ". RushVR is made for Until Dawn: Rush of Blood (US " + $madeFor + ", Europe CUSA02350 or Asia CUSA04006, version 01.00): with another game, its fixes do not apply, and it may not run.") "Yellow"
+} elseif ($info["APP_VER"] -ne "01.00") {
+    Say ("This is " + $info["TITLE_ID"] + " (" + (Get-ReleaseName $info) + ") version " + $info["APP_VER"] + ". RushVR is made for version 01.00: with an update, its fixes for the game's speed and picture are looked for and left out if they are not found (the log says so).") "Yellow"
+} elseif ($info["TITLE_ID"] -ne $madeFor) {
+    Say ("The game: " + $info["TITLE_ID"] + ", the " + (Get-ReleaseName $info) + " release. Its fixes for the game's speed and picture are looked for in it, and the log says whether they were found.")
+}
+if ($info.Count -gt 0 -and [System.IO.Path]::GetDirectoryName($game).Length + 1 + $longestInside -gt 259) {
     [void](Show-Box ("The game is in`n" + [System.IO.Path]::GetDirectoryName($game) + "`n`nThat path is too long: some of the game's files have a path of more than 259 characters there, which the emulator cannot open, and the game would stop when it needs them. Move the folder somewhere with a shorter path, for example C:\Games\RushVR, and start again.") "OK" "Warning")
     exit 1
 }

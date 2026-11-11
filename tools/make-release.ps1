@@ -116,8 +116,8 @@ Write-Text (Join-Path $pc "pc-vr\settings.txt") ((@($documented) + $defaults) -j
 
 $source = if ($RepoUrl -ne "") { "The source is at $RepoUrl" } else { "The source is in the repository this package was published from" }
 Write-Text (Join-Path $pc "games\PUT YOUR GAME HERE.txt") @"
-Put your own copy of Until Dawn: Rush of Blood (US release CUSA03683, version 1.00) in this
-folder, then start "Play Rush of Blood.bat". Either form will do, anywhere in here:
+Put your own copy of Until Dawn: Rush of Blood (US release CUSA03683, version 1.00; the
+European CUSA02350 and Asian CUSA04006 releases work as well) in this folder, then start "Play Rush of Blood.bat". Either form will do, anywhere in here:
 
 - the game's folder, the one with eboot.bin in it, or
 - the game's .pkg file: it is unpacked the first time, which takes a minute or so.
@@ -149,8 +149,9 @@ through Virtual Desktop.
 5. In the game's own start-up question, choose the DualShock controller if you play with the
    DualSense, or the Move controllers if you play with the Quest controllers.
 
-What is new in $Version (the whole list is in CHANGELOG.md): SteamVR (PS VR2) no longer crashes
-at the start, a Log tab to read and save the log, a much sharper picture in the
+What is new in $Version (the whole list is in CHANGELOG.md): the Asian release of the game
+(CUSA04006, English/Chinese/Korean) gets the same speed and picture fixes as the US one. From
+0.5.6: SteamVR (PS VR2) no longer crashes at the start, a Log tab to read and save the log, a much sharper picture in the
 headset (only what the headset shows is sent, at full size), any VR controllers as the game's Move
 wands with a choice of buttons, a headset choice that sets the field of view (PlayStation VR2
 included). From 0.5.0: the Move controllers are part of the free release. From 0.4.5: the pig room's streaks and the flashlight's shadows are

@@ -137,7 +137,7 @@ const Larger& GetLarger() {
     return larger;
 }
 
-// Until Dawn: Rush of Blood (CUSA03683, and CUSA02350 of Europe). The game draws both eyes into
+// Until Dawn: Rush of Blood (CUSA03683, CUSA02350 of Europe, CUSA04006 of Asia). The game draws both eyes into
 // one picture, side by side: 2304x1296 on the console (1152x1296 an eye, 1.2 times the
 // 1920x1080 of a television), 2688x1512 on its Pro model. The sizes are a list of rectangles
 // in its read-only data, of which it takes one by whether the console is a Pro; the memory it
@@ -173,8 +173,7 @@ constexpr std::size_t RushProPoolAt = 1;
 constexpr std::size_t RushConsolePoolAt = 6;
 
 bool IsRush() {
-    const auto serial = Common::ElfInfo::Instance().GameSerial();
-    return serial == "CUSA03683" || serial == "CUSA02350";
+    return IsRushOfBlood();
 }
 
 /// The picture Rush of Blood is to draw, SHADPS4_ROB_EYE_WIDTH=<pixels> the width of an eye (1152
@@ -815,6 +814,42 @@ private:
 
 } // namespace
 
+const char* RushRelease() {
+    const auto serial = Common::ElfInfo::Instance().GameSerial();
+    if (serial == "CUSA03683") {
+        return "US";
+    }
+    if (serial == "CUSA02350") {
+        return "Europe";
+    }
+    if (serial == "CUSA04006") {
+        return "Asia (English, Chinese, Korean)";
+    }
+    return "another release";
+}
+
+bool IsRushOfBlood() {
+    const auto& info = Common::ElfInfo::Instance();
+    const auto serial = info.GameSerial();
+    if (serial == "CUSA03683" || serial == "CUSA02350" || serial == "CUSA04006") {
+        return true;
+    }
+    const char* forced = std::getenv("SHADPS4_ROB_RELEASE");
+    if (forced != nullptr && forced[0] == '1') {
+        return true;
+    }
+    // A release with a serial not known here still has the game's name in its param.sfo.
+    std::string title{info.Title()};
+    std::transform(title.begin(), title.end(), title.begin(), [](char c) {
+        return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+    });
+    // "\xeb\x9f\xac..." is the Korean "Rush of Blood" in UTF-8.
+    static constexpr std::string_view Korean{"\xeb\x9f\xac\xec\x8b\x9c \xec\x98\xa4\xeb\xb8\x8c "
+                                             "\xeb\xb8\x94\xeb\x9f\xac\xeb\x93\x9c"};
+    return title.find("rush of blood") != std::string::npos ||
+           title.find(Korean) != std::string::npos;
+}
+
 void OnFrameSubmitted() {
     const VAddr base = KnownBase();
     if (base == 0) {
@@ -905,6 +940,9 @@ u32 FramePace() {
 
 void Prepare() {
     if (IsRush()) {
+        const auto& info = Common::ElfInfo::Instance();
+        LOG_INFO(Core, "Until Dawn: Rush of Blood, {} release ({} version {})", RushRelease(),
+                 info.GameSerial(), info.AppVer());
         PrepareRush();
         return;
     }
