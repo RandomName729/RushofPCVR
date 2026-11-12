@@ -14,6 +14,8 @@ from your own copy of the game, through a PS4 emulator.
 
 **EVERYTHING WILL BE OUT FOR FREE AT THE v1.0 RELEASE**
 
+**UPCOMING FLAT MODE SUPPORT: Game runs better while on flat mode, guns follow the head, keyboard/mouse and controller support, needs further fixes and testing before releasing publicly, but it is playable and early access is out on my Patreon!**
+
 [Download](https://github.com/RandomName729/RushofPCVR/releases) &nbsp;·&nbsp;
 [Quick start](#quick-start) &nbsp;·&nbsp;
 [Settings](#settings) &nbsp;·&nbsp;
