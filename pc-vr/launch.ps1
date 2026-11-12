@@ -179,6 +179,10 @@ function Show-ButtonsWindow($owner, [int]$type, [string[]]$current) {
 }
 # The version shown in the window's banner (the release scripts check that it is the release's).
 $launcherVersion = "0.5.7"
+# Flat mode (the game on the monitor, without a headset) is offered in the window only where
+# this is $true (the 0.6.0 early-access build). With $false the VR / Flat buttons are hidden and
+# the flat setting is ignored.
+$flatModeOffered = $false
 
 # PS4 Pro mode ("neo_mode" in user\config.json) is always switched OFF now (see the call just
 # before the emulator starts): with it on, the game's flashlight shadows split into extra lines
@@ -1923,13 +1927,13 @@ function Show-MenuModern {
         $form.Controls.Add($headset)
         # Which headset: picking one sets the field of view and the controller type to what suits
         # it; both can still be changed by themselves afterwards (headset_model).
-        [void](New-Label $headset "Your headset" 18 50 296 20 $cDim 9)
+        $headsetLabel = New-Label $headset "Your headset" 18 50 296 20 $cDim 9
         $headsetIndex = 0
         $headsetKey = Setting "headset_model" "quest3"
         for ($h = 0; $h -lt $headsetModels.Count; $h++) { if ($headsetModels[$h].Key -eq $headsetKey) { $headsetIndex = $h } }
         $headsetBox = New-Dropdown $headset @($headsetModels | ForEach-Object { $_.Name }) $headsetIndex 18 72 296
         $tips.SetToolTip($headsetBox, "Sets the field of view and the controller type to what suits this headset. You can still change either of them yourself afterwards. Only the Meta Quest 3 has been tuned by testing; the others are starting points.")
-        [void](New-Label $headset "Connection (OpenXR runtime)" 18 112 296 20 $cDim 9)
+        $runtimeLabel = New-Label $headset "Connection (OpenXR runtime)" 18 112 296 20 $cDim 9
         $runtimeNames = @("Automatic (as the PC has it set up)", "Virtual Desktop", "SteamVR")
         $runtimeKeys = @("pc", "virtualdesktop", "steamvr")
         $index = [array]::IndexOf($runtimeKeys, (Setting "runtime" "pc"))
@@ -1946,6 +1950,61 @@ function Show-MenuModern {
         }
         $runtimeBox.Add_SelectedIndexChanged($updateRuntime)
         & $updateRuntime
+
+        # Flat mode shares this card: VR or Flat in its title row. Flat plays on the monitor
+        # without a headset, so the card then shows how it is played instead of the headset.
+        $flatOn = New-Object RushUi.Toggle
+        $flatOn.Visible = $false
+        $flatOn.Checked = ($flatModeOffered -and ((Setting "flat" "0") -eq "1"))
+        $headset.Controls.Add($flatOn)
+        $vrChoice = New-Object RushUi.FlatButton
+        $vrChoice.Text = "VR"
+        $vrChoice.SetBounds(150, 7, 76, 28)
+        $headset.Controls.Add($vrChoice)
+        $tips.SetToolTip($vrChoice, "Plays in the VR headset, as usual.")
+        $flatChoice = New-Object RushUi.FlatButton
+        $flatChoice.Text = "Flat"
+        $flatChoice.SetBounds(234, 7, 80, 28)
+        $headset.Controls.Add($flatChoice)
+        $tips.SetToolTip($flatChoice, "Flat mode (experimental): plays on the monitor without a headset. The game shows in its window on the PC (F11 for full screen) and no VR runtime is started. In the game's start-up question choose the DualShock controller.")
+        $flatControlsKeys = @("controller", "keyboard")
+        $flatControlsNames = @("Controller (any kind)", "Keyboard and mouse")
+        $flatControlsLabel = New-Label $headset "Play with" 18 50 296 20 $cDim 9
+        $flatControlsIndex = [math]::Max(0, [array]::IndexOf($flatControlsKeys, (Setting "flat_controls" "controller")))
+        $flatControlsBox = New-Dropdown $headset $flatControlsNames $flatControlsIndex 18 72 296
+        $tips.SetToolTip($flatControlsBox, "Controller: any controller (DualSense, Xbox and others). The sticks aim the two arms, the triggers fire, the bumpers reload, the d-pad turns the view. Keyboard and mouse: the mouse turns the view and both guns aim at the middle of the screen; left click fires the left gun, right click the right gun, R reloads both (Q the left, E the right), Esc is OPTIONS. The keys are in user\input_config\flat-keyboard.ini. Hold OPTIONS for a second to look straight ahead again.")
+        $flatMouseLabel = New-Label $headset "Mouse sensitivity" 18 112 196 20 $cDim 9
+        $flatMouseValue = New-Label $headset "" 214 112 100 20 $cAccent 9.5 "Segoe UI Semibold" "TopRight"
+        $flatMouseStart = [int][math]::Round((Read-Number "flat_mouse" 8))
+        $flatMouseStart = [math]::Max(1, [math]::Min(30, $flatMouseStart))
+        $flatMouse = New-Slider $headset 1 30 $flatMouseStart 18 134 296
+        $tips.SetToolTip($flatMouse, "How far the view turns when the mouse moves: degrees for 100 pixels of mouse movement. Recommended: 8. Keyboard and mouse only.")
+        $flatUpdate = {
+            $flat = $flatOn.Checked
+            $vrChoice.Primary = -not $flat
+            $flatChoice.Primary = $flat
+            $vrChoice.Invalidate()
+            $flatChoice.Invalidate()
+            $headset.Title = $(if ($flat) { "Flat mode" } else { "Headset" })
+            $headset.Invalidate()
+            foreach ($c in @($headsetLabel, $headsetBox, $runtimeLabel, $runtimeBox)) { $c.Visible = -not $flat }
+            foreach ($c in @($flatControlsLabel, $flatControlsBox, $flatMouseLabel, $flatMouseValue, $flatMouse)) { $c.Visible = $flat }
+            $mouseNow = ($flatControlsBox.SelectedIndex -eq 1)
+            $flatMouse.Enabled = $mouseNow
+            $flatMouseLabel.ForeColor = $(if ($mouseNow) { $cDim } else { $cOff })
+            $flatMouseValue.ForeColor = $(if ($mouseNow) { $cAccent } else { $cOff })
+            $flatMouseValue.Text = ("" + $flatMouse.Value)
+            if ($null -ne $flatGreyOut) { & $flatGreyOut }
+        }
+        if (-not $flatModeOffered) {
+            $vrChoice.Visible = $false
+            $flatChoice.Visible = $false
+        }
+        $vrChoice.Add_Click({ $flatOn.Checked = $false; & $flatUpdate })
+        $flatChoice.Add_Click({ $flatOn.Checked = $true; & $flatUpdate })
+        $flatControlsBox.Add_SelectedIndexChanged($flatUpdate)
+        $flatMouse.Add_ValueChanged($flatUpdate)
+        & $flatUpdate
 
         $rate = New-Card "Frame rate" 380 92 332 180
         $form.Controls.Add($rate)
@@ -2249,6 +2308,25 @@ function Show-MenuModern {
         }
         $moveOn.Add_CheckedChanged($moveEnable)
         & $moveEnable
+
+        # Flat mode: what only a headset uses is greyed out (the choices stay saved for VR): the
+        # window's view (the left eye fills it), the black corners, the picture size and margin
+        # sent to the headset, and the Move controllers.
+        $flatGreyOut = {
+            $flat = $flatOn.Checked
+            foreach ($c in @($maskBox, $layerBox, $marginBox, $viewBox, $zoom)) { $c.Enabled = -not $flat }
+            foreach ($c in $moveCard.Controls) { $c.Enabled = -not $flat }
+            if ($flat) {
+                $windowCard.Summary = "not used in flat mode: the left eye fills the window"
+                foreach ($label in $moveValues) { $label.ForeColor = $cOff }
+                foreach ($label in $moveTitleLabels) { $label.ForeColor = $cOff }
+            } else {
+                $moveOn.Enabled = $motionEdition
+                & $moveEnable
+                & $updateView
+            }
+        }
+        & $flatGreyOut
         # (Every edition has the Move controllers since 0.5.0; this is left for a build without.)
         if (-not $motionEdition) {
             foreach ($c in $moveCard.Controls) { if ($c -ne $padChoice) { $c.Visible = $false } }
@@ -2572,6 +2650,11 @@ function Show-MenuModern {
     Save-Setting "fov" ($fov.Value * 5)
     Save-Setting "pc_view" ($viewKeys[$viewBox.SelectedIndex])
     Save-Setting "pc_zoom" ($zoom.Value * 5)
+    if ($flatModeOffered) {
+        Save-Setting "flat" ($(if ($flatOn.Checked) { "1" } else { "0" }))
+        Save-Setting "flat_controls" ($flatControlsKeys[$flatControlsBox.SelectedIndex])
+        Save-Setting "flat_mouse" ("" + $flatMouse.Value)
+    }
     if ($motionEdition) {
         Save-Setting "controllers" ($(if ($moveOn.Checked) { "quest" } else { "dualsense" }))
         for ($i = 0; $i -lt 3; $i++) { Save-Setting $moveKeys[$i] ("" + $moveSliders[$i].Value) }
@@ -2695,11 +2778,32 @@ $pcZoom = 100.0
 if ([double]::TryParse((Setting "pc_zoom" "100"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$pcZoom) -and $pcZoom -ne 100.0) {
     $env:SHADPS4_PC_WINDOW_ZOOM = ([math]::Max(30.0, [math]::Min(200.0, $pcZoom)) / 100.0).ToString([System.Globalization.CultureInfo]::InvariantCulture)
 }
+# flat=1: the game plays on the monitor without a headset (the window sets it); no OpenXR runtime
+# is used and the Move wands are not (they are the VR controllers). flat_controls: controller
+# (the sticks aim the arms, the d-pad turns the view) or keyboard (the mouse turns the view and
+# both guns aim at the middle); flat_mouse: degrees the view turns for 100 pixels of the mouse.
+foreach ($name in @("SHADPS4_FLAT", "SHADPS4_FLAT_CONTROLS", "SHADPS4_FLAT_MOUSE")) { Remove-Item -Path ("Env:" + $name) -ErrorAction SilentlyContinue }
+$flatMode = $flatModeOffered -and ((Setting "flat" "0") -eq "1")
+$flatKeyboard = $flatMode -and ((Setting "flat_controls" "controller") -eq "keyboard")
+if ($flatMode) {
+    $env:SHADPS4_FLAT = "1"
+    $env:SHADPS4_OPENXR = "0"
+    $env:SHADPS4_FLAT_CONTROLS = $(if ($flatKeyboard) { "keyboard" } else { "controller" })
+    $flatSensitivity = 8.0
+    if ([double]::TryParse((Setting "flat_mouse" "8"), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$flatSensitivity)) {
+        $env:SHADPS4_FLAT_MOUSE = ([math]::Max(1.0, [math]::Min(30.0, $flatSensitivity))).ToString([System.Globalization.CultureInfo]::InvariantCulture)
+    }
+    # The left eye's picture fills the window: not the lens circles, and not both eyes blended
+    # into one view (everything near, the guns and hands, would show twice). No black mask: its
+    # circle is a little inside the lens circle and would ring the window; no zoom either.
+    $env:SHADPS4_PC_WINDOW = "left"
+    Remove-Item -Path Env:SHADPS4_VR_MASK, Env:SHADPS4_PC_WINDOW_ZOOM -ErrorAction SilentlyContinue
+}
 # The VR controllers play as Move wands when "controllers=quest" (the window sets
 # it); move_pitch is in degrees, move_reach and move_turn in percent. What is not set is left to the
 # emulator's own recommended values.
 Remove-Item -Path Env:SHADPS4_QUEST_MOVE -ErrorAction SilentlyContinue
-if ($motionEdition -and (Setting "controllers" "dualsense") -eq "quest") { $env:SHADPS4_QUEST_MOVE = "1" }
+if ($motionEdition -and -not $flatMode -and (Setting "controllers" "dualsense") -eq "quest") { $env:SHADPS4_QUEST_MOVE = "1" }
 if ($env:SHADPS4_QUEST_MOVE -eq "1") {
     # With a PlayStation controller connected the game keeps using it and ignores the VR
     # controllers, so ask for it to be unplugged (or turned off) first.
@@ -2757,7 +2861,7 @@ if ($target -ge 20) {
 }
 $pace = Setting "pace" ""
 if ($pace -eq "1") { $env:SHADPS4_VR_FASTEST_PACE = "1"; $env:SHADPS4_VR_FPS_CAP = "" } elseif ($pace -ne "" -and $pace -ne "2") { $env:SHADPS4_VR_PACE = $pace }
-if ((Setting "headset" "1") -eq "0") { $env:SHADPS4_OPENXR = "0" }
+if ((Setting "headset" "1") -eq "0" -or $flatMode) { $env:SHADPS4_OPENXR = "0" }
 if ((Setting "pause" "1") -eq "0") { $env:SHADPS4_XR_PAUSE = "0" }
 $env:SHADPS4_XR_WAIT = Setting "wait" "60"
 foreach ($pair in $extraEnv) {
@@ -2784,7 +2888,7 @@ function Find-OpenXrRuntime([string]$pattern) {
     return ""
 }
 $runtimeSetting = Setting "runtime"
-if ($runtimeSetting -notin @("", "pc", "default") -and -not $env:XR_RUNTIME_JSON) {
+if ($runtimeSetting -notin @("", "pc", "default") -and -not $env:XR_RUNTIME_JSON -and -not $flatMode) {
     $json = ""
     if ($runtimeSetting -eq "steamvr") {
         $json = Find-OpenXrRuntime "steamxr"
@@ -2826,53 +2930,69 @@ if ($runtimeSetting -notin @("", "pc", "default") -and -not $env:XR_RUNTIME_JSON
         }
     }
 }
-$runtime = ""
-if ($env:XR_RUNTIME_JSON) {
-    $runtime = $env:XR_RUNTIME_JSON
+if ($flatMode) {
+    Say "Flat mode: the game plays on the monitor, without a headset (experimental)." "Cyan"
+    Say "In the game's start-up question choose the DualShock controller."
+    if ($flatKeyboard) {
+        Say "Keyboard and mouse: the mouse turns the view, and both guns aim at the middle of the screen."
+        Say "Left click fires the left gun, right click the right gun. R reloads both, Q the left, E the right."
+        Say "Space or Enter = cross, Esc = OPTIONS (hold it for a second to look straight ahead again)."
+        Say "Alt+Tab frees the mouse. The keys are in user\input_config\flat-keyboard.ini (F8 reads it again)."
+    } else {
+        Say "Controller (any: DualSense, Xbox and others): the sticks aim the arms, the triggers fire,"
+        Say "the bumpers reload, the d-pad turns the view. Hold OPTIONS for a second (or press the PS or"
+        Say "Xbox button) to look straight ahead again."
+    }
+    Say "F11 switches the game's window to full screen."
 } else {
-    try { $runtime = (Get-ItemProperty 'HKLM:\SOFTWARE\Khronos\OpenXR\1' -ErrorAction Stop).ActiveRuntime } catch {}
-}
-if ($runtime -eq "") {
-    Say "No OpenXR runtime is set up on this PC: the game will only show on the monitor." "Yellow"
-    Say "Virtual Desktop Streamer installs one (Options > OpenXR Runtime: VDXR)."
-} else {
-    Say "OpenXR runtime: $runtime"
-    if ($runtime -match "virtualdesktop") {
-        $streamer = Get-Process "VirtualDesktop.Streamer" -ErrorAction SilentlyContinue
-        if (-not $streamer) {
-            $exe = Join-Path (Split-Path -Parent (Split-Path -Parent $runtime)) "VirtualDesktop.Streamer.exe"
-            if (Test-Path $exe) {
-                Say "Starting Virtual Desktop Streamer..."
-                Start-Process $exe
-            } else {
-                Say "Virtual Desktop Streamer is not running: start it, then connect from the headset." "Yellow"
+    $runtime = ""
+    if ($env:XR_RUNTIME_JSON) {
+        $runtime = $env:XR_RUNTIME_JSON
+    } else {
+        try { $runtime = (Get-ItemProperty 'HKLM:\SOFTWARE\Khronos\OpenXR\1' -ErrorAction Stop).ActiveRuntime } catch {}
+    }
+    if ($runtime -eq "") {
+        Say "No OpenXR runtime is set up on this PC: the game will only show on the monitor." "Yellow"
+        Say "Virtual Desktop Streamer installs one (Options > OpenXR Runtime: VDXR)."
+    } else {
+        Say "OpenXR runtime: $runtime"
+        if ($runtime -match "virtualdesktop") {
+            $streamer = Get-Process "VirtualDesktop.Streamer" -ErrorAction SilentlyContinue
+            if (-not $streamer) {
+                $exe = Join-Path (Split-Path -Parent (Split-Path -Parent $runtime)) "VirtualDesktop.Streamer.exe"
+                if (Test-Path $exe) {
+                    Say "Starting Virtual Desktop Streamer..."
+                    Start-Process $exe
+                } else {
+                    Say "Virtual Desktop Streamer is not running: start it, then connect from the headset." "Yellow"
+                }
             }
         }
     }
-}
-Say ""
-if ($runtime -match "steam") {
-    Say "In the headset: connect it to SteamVR (the SteamVR window shows when it is). The game moves into the headset by itself."
-} else {
-    Say "In the headset: connect Virtual Desktop to this PC. The game moves into the headset by itself."
-}
-if ($env:SHADPS4_OPENXR -ne "0" -and [int]$env:SHADPS4_XR_WAIT -gt 0) {
-    Say ("The game waits up to " + $env:SHADPS4_XR_WAIT + " seconds for the headset before it starts on the monitor.")
-}
-if ($env:SHADPS4_QUEST_MOVE -eq "1") {
-    Say "Move controllers: your VR controllers play as the game's two PlayStation Move wands."
-    Say "Unplug the DualSense (or turn it off) first: while one is connected the game uses it and the VR controllers do nothing."
-    Say "In the game's start-up question choose the Move controllers, then press the grip button"
-    Say "(the MOVE button) on the controller you hold. Right hand = the first wand."
-    Say "Trigger = T, grip = MOVE, A/X = cross, B/Y = circle, stick click = square,"
-    Say "stick up = triangle, stick down = select, left menu = start (hold it for a second to reset the view)."
-} else {
-    Say "The DualSense: connect it to THIS PC (USB cable, or Bluetooth paired with the PC). Paired with"
-    Say "the headset, it reaches the PC through Virtual Desktop without motion sensors or touchpad."
-    Say "Where it is in the game comes from your hands: hand tracking on in the headset, and in"
-    Say "Virtual Desktop's settings hand tracking forwarded to the PC."
-    Say "Hold OPTIONS for a second (or press the PS button) to reset the view."
-    Say "The DualSense is what plays the game: the headset's own controllers do not."
+    Say ""
+    if ($runtime -match "steam") {
+        Say "In the headset: connect it to SteamVR (the SteamVR window shows when it is). The game moves into the headset by itself."
+    } else {
+        Say "In the headset: connect Virtual Desktop to this PC. The game moves into the headset by itself."
+    }
+    if ($env:SHADPS4_OPENXR -ne "0" -and [int]$env:SHADPS4_XR_WAIT -gt 0) {
+        Say ("The game waits up to " + $env:SHADPS4_XR_WAIT + " seconds for the headset before it starts on the monitor.")
+    }
+    if ($env:SHADPS4_QUEST_MOVE -eq "1") {
+        Say "Move controllers: your VR controllers play as the game's two PlayStation Move wands."
+        Say "Unplug the DualSense (or turn it off) first: while one is connected the game uses it and the VR controllers do nothing."
+        Say "In the game's start-up question choose the Move controllers, then press the grip button"
+        Say "(the MOVE button) on the controller you hold. Right hand = the first wand."
+        Say "Trigger = T, grip = MOVE, A/X = cross, B/Y = circle, stick click = square,"
+        Say "stick up = triangle, stick down = select, left menu = start (hold it for a second to reset the view)."
+    } else {
+        Say "The DualSense: connect it to THIS PC (USB cable, or Bluetooth paired with the PC). Paired with"
+        Say "the headset, it reaches the PC through Virtual Desktop without motion sensors or touchpad."
+        Say "Where it is in the game comes from your hands: hand tracking on in the headset, and in"
+        Say "Virtual Desktop's settings hand tracking forwarded to the PC."
+        Say "Hold OPTIONS for a second (or press the PS button) to reset the view."
+        Say "The DualSense is what plays the game: the headset's own controllers do not."
+    }
 }
 Say "Close the game's window to quit."
 Say ""

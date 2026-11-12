@@ -17,11 +17,18 @@ version 1.00); nothing of it is included.
 - **The start-up window accepts the European and Asian releases** (the status line is green for
   them), and the warning for a game folder whose path is too long now shows for every release.
 - The log names the release it found at the start (`Until Dawn: Rush of Blood, ... release`).
+- **No more surprise calibration screens.** A Quest controller held still for a few seconds goes
+  idle, and the game took that as its Move controller disconnecting and asked for calibration
+  again. The controller now stays connected where it was last seen, with nothing pressed, until
+  it is seen again.
+- **Clock fix: one of its places was not game code.** One of the 201 places it changed is game
+  data that happens to look like a clock read; it is left alone now (all releases).
 
-### Testers wanted: the Korean / Asian copy
+### Korean / Asian copy: first test passed, more testers welcome
 
-I don't have this copy, so this is untested. If you play it, please start a level, then open the
-**Log** tab, choose **Save a copy...** and send the zip. Look for these lines:
+Thanks to the first tester, the logs show the Korean copy is recognised and both fixes work. If you
+play it, please start a level, then open the **Log** tab, choose **Save a copy...** and send the zip,
+especially if the game closes by itself. Look for these lines:
 
 - `Until Dawn: Rush of Blood, Asia (English, Chinese, Korean) release`
 - `Rush of Blood draws ...` (the sharper picture is on), or `... not found in this build`
@@ -45,8 +52,7 @@ source of everything inside is in this repository.
 
 ## Known problems
 
-- The Asian (Korean) release is untested; the European one has been reported to play.
-- The game can close by itself now and then (seen once after a save); being looked at.
+- The game can close by itself now and then (sometimes right after a save); being looked at.
 - Small stutters now and then; the player's arms can look dark in the intro.
 - Headsets and controllers other than the Quest 3 and its controllers are untested.
 - Levels 5 and later are untested.

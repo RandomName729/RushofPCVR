@@ -202,7 +202,8 @@ std::vector<uintptr_t> RdtscSitesFromTable(u32* candidates) {
     0x15a5bb7, 0x15a6874, 0x15a76d7, 0x15a83f9, 0x15a8fb7, 0x15a9e07, 0x15aab38, 0x15ab7ad,
     0x15ac426, 0x15add3f, 0x15ae37b, 0x15aea99, 0x15af002, 0x15af6ed, 0x15afd02, 0x15b0158,
     0x15b083d, 0x15b0e4a, 0x15b136b, 0x15b1894, 0x15b6d97, 0x161f7ab, 0x16631c3, 0x1741329,
-    0x1aeec5e,
+    // (0x1aeec5e, once in this list, is not code: it is in the game's read-only data after its
+    // code, where two bytes of something else happen to read 0f 31. It was changed to 0f 0b.)
     };
     for (const u32 offset : kRdtscSites) {
         ++*candidates;

@@ -7,7 +7,7 @@
 
 namespace Libraries::Kernel {
 
-/// The code around each of the 201 rdtsc instructions the clock fix (time.cpp) changes, taken
+/// The code around each of the 200 rdtsc instructions the clock fix (time.cpp) changes, taken
 /// from Until Dawn: Rush of Blood US 1.00 (CUSA03683). Each piece occurs exactly once in that
 /// build, so the same instructions can be found in another build of the game (the European
 /// one) without a table of its own.
@@ -474,7 +474,8 @@ inline constexpr RdtscPattern RdtscPatterns[] = {
     {0x161f7ab, 3946, 8, 18},
     {0x16631c3, 3964, 8, 18},
     {0x1741329, 3982, 8, 18},
-    {0x1aeec5e, 4000, 8, 18},
+    // (The piece at 4000 in RdtscPatternBytes, for US offset 0x1aeec5e, is not used: that is the
+    // game's read-only data, not an rdtsc.)
 };
 
 } // namespace Libraries::Kernel

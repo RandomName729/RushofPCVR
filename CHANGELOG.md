@@ -3,10 +3,10 @@
 All notable changes to RushVR, newest first. RushVR is shadPS4 plus a VR layer and the fixes that
 let Until Dawn: Rush of Blood run under emulation.
 
-## 0.5.7 - 2026-11-10
+## 0.5.7 - 2026-11-11
 
 - **Asian release (CUSA04006, English/Chinese/Korean): clock fix and sharper picture.** Its game
-  speed and caption fix (the 201 places the game reads the processor's clock) and the larger
+  speed and caption fix (the places the game reads the processor's clock) and the larger
   picture for the headset (the game's list of sizes and its graphics pool) were only applied to
   the US and European releases, so in the Korean copy everything ran too fast and the picture
   stayed at the console's size. Both are now found in it the same way as in the European one: by
@@ -15,6 +15,15 @@ let Until Dawn: Rush of Blood run under emulation.
   it. The log names the release at start-up (`Until Dawn: Rush of Blood, ... release`).
 - The launcher finds and accepts the European and Asian releases (the status line is green for
   them), and the check for a game folder whose path is too long now runs for every release.
+- **The game no longer asks to calibrate the Move controllers again when you hold still.** A Quest
+  controller left still for a few seconds (or one the headset switches to hand tracking for) was
+  reported as gone, and the game took that as a Move wand disconnected. It now stays connected
+  where it was last seen, with nothing pressed, until it is seen again. `SHADPS4_QUEST_MOVE_HOLD=0`
+  turns this off. Seen in the first Korean (CUSA04006) test logs.
+- **Clock fix: one of its 201 places was not code.** US offset 0x1aeec5e is in the game's read-only
+  data after its code, where two bytes happen to read like an rdtsc instruction; the fix changed
+  one of them. It now changes the 200 real ones only (all releases). Whether this byte had anything
+  to do with the occasional crash is not known yet.
 
 ## 0.5.6 - 2026-11-09
 

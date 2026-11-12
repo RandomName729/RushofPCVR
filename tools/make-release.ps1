@@ -150,7 +150,8 @@ through Virtual Desktop.
    DualSense, or the Move controllers if you play with the Quest controllers.
 
 What is new in $Version (the whole list is in CHANGELOG.md): the Asian release of the game
-(CUSA04006, English/Chinese/Korean) gets the same speed and picture fixes as the US one. From
+(CUSA04006, English/Chinese/Korean) gets the same speed and picture fixes as the US one, and the
+game no longer asks to calibrate the Move controllers again when you hold them still. From
 0.5.6: SteamVR (PS VR2) no longer crashes at the start, a Log tab to read and save the log, a much sharper picture in the
 headset (only what the headset shows is sent, at full size), any VR controllers as the game's Move
 wands with a choice of buttons, a headset choice that sets the field of view (PlayStation VR2

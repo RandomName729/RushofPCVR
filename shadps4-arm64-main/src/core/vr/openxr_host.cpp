@@ -404,6 +404,12 @@ struct OpenXrHost::Impl {
     bool quest_trigger_down[2]{};
     bool quest_squeeze_down[2]{};
     bool quest_wand_seen[2]{};
+    /// The wand has had a place at least once (see quest_hold).
+    bool quest_wand_placed[2]{};
+    bool quest_wand_held[2]{};
+    /// A controller the runtime stops reporting (put down and gone to sleep, or switched to hand
+    /// tracking) stays connected for the game, where it was. SHADPS4_QUEST_MOVE_HOLD=0 lets it go.
+    bool quest_hold{true};
     u8 quest_rumble_sent[2]{};
     bool quest_menu_down{};
     bool quest_menu_fired{};
@@ -1158,6 +1164,9 @@ struct OpenXrHost::Impl {
         }
         quest_scale = std::clamp(EnvFloat("SHADPS4_QUEST_MOVE_SCALE", quest_scale), 0.05f, 3.0f);
         quest_turn = std::clamp(EnvFloat("SHADPS4_QUEST_MOVE_TURN", quest_turn), 0.05f, 3.0f);
+        if (const char* hold = std::getenv("SHADPS4_QUEST_MOVE_HOLD"); hold != nullptr) {
+            quest_hold = hold[0] != '0';
+        }
         // SHADPS4_QUEST_MOVE_FOLLOW: seconds the reach and turn anchor takes to follow the head
         // (0 = the head itself: the hands then move with the head).
         quest_follow = std::clamp(EnvFloat("SHADPS4_QUEST_MOVE_FOLLOW", quest_follow), 0.0f, 120.0f);
@@ -1408,7 +1417,27 @@ struct OpenXrHost::Impl {
                     wand.linear_velocity = placed.linear_velocity;
                     wand.angular_velocity = placed.angular_velocity;
                     wand.tracked = true;
+                    quest_wand_placed[wand_index] = true;
                 }
+            }
+            // A Move wand on the console stays connected when it is put down, and the camera
+            // still sees it. A Quest controller left still for a few seconds is reported as gone
+            // (or loses its place): the game then asks for the controllers to be calibrated again.
+            // It is kept where it was last seen instead, with nothing pressed, until it is back.
+            const bool hold = quest_hold && quest_wand_placed[wand_index] && !wand.tracked;
+            if (hold) {
+                wand.connected = true;
+                wand.tracked = true;
+                wand.buttons = 0;
+                wand.trigger = 0;
+                wand.linear_velocity = {};
+                wand.angular_velocity = {};
+            }
+            if (hold != quest_wand_held[wand_index]) {
+                quest_wand_held[wand_index] = hold;
+                LOG_INFO(Core_Vr, "Move wand {}: {}", wand_index,
+                         hold ? "its controller is not seen, so it is kept where it was last seen"
+                              : "its controller is seen again");
             }
             hub.Publish(wand_index, wand);
 
@@ -1966,9 +1995,25 @@ struct OpenXrHost::Impl {
                                 seen.tan_in < 10.0f && seen.tan_top > 0.1f &&
                                 seen.tan_top < 10.0f && seen.tan_bottom > 0.1f &&
                                 seen.tan_bottom < 10.0f;
+        // Only a real change of what the headset shows replaces the view kept for Crop. Some
+        // runtimes give slightly different angles from one frame to the next, and Crop rounds
+        // the edges to whole pixels: each tiny difference could move an edge by a pixel and make
+        // the runtime's images again (a hitch and an "Each eye hands over" line each time).
+        // 0.002 in tangent is under a tenth of a degree, about two pixels at the largest eye
+        // width. The kept view is what is compared with, so a slow drift still counts once it
+        // adds up.
         if (seen_valid) {
-            headset_seen = seen;
-            headset_seen_valid = true;
+            constexpr float FovTolerance = 0.002f;
+            const auto moved = [](float kept, float now) {
+                return std::abs(kept - now) > FovTolerance;
+            };
+            if (!headset_seen_valid || moved(headset_seen.tan_out, seen.tan_out) ||
+                moved(headset_seen.tan_in, seen.tan_in) ||
+                moved(headset_seen.tan_top, seen.tan_top) ||
+                moved(headset_seen.tan_bottom, seen.tan_bottom)) {
+                headset_seen = seen;
+                headset_seen_valid = true;
+            }
         }
         if (seen_valid && ++fov_samples % 600 == 1) {
             runtime.NoteHeadsetFov(seen);
