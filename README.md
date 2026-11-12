@@ -7,7 +7,7 @@
 Play the PlayStation VR game on a **Meta Quest 3** through Virtual Desktop (or any OpenXR headset),
 from your own copy of the game, through a PS4 emulator.
 
-[![Version](https://img.shields.io/badge/version-0.5.7-2f81f7?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.8-2f81f7?style=flat-square)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-GPL--2.0--or--later-3fb950?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-8957e5?style=flat-square)](#requirements)
 [![Headset](https://img.shields.io/badge/headset-Quest%203%20%C2%B7%20OpenXR-f0883e?style=flat-square)](#requirements)
